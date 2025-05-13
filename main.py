@@ -174,22 +174,18 @@ def main(args):
     logger = setup_logger(save_file=log_path)
     logger.info(f"Save logs to: {log_path}")
 
-    with Section("Global setup", logger=logger):
-        global_setup(args)
+    global_setup(args)
 
-    with Section("Building data loaders", logger=logger):
-        data_loaders = build_data_loaders(args, logger)
+    data_loaders = build_data_loaders(args, logger)
 
-    with Section("Building model", logger=logger):
-        model = build_model(args, logger)
+    model = build_model(args, logger)
 
-    with Section("Building criterions, optimizer, scheduler", logger=logger):
-        criterion = build_criterion(args)
-        optimizer = build_optimizer(args, model)
-        scheduler = build_scheduler(args, optimizer)
 
-    with Section("Building evaluators", logger=logger):
-        evaluators = build_evaluators(args)
+    criterion = build_criterion(args)
+    optimizer = build_optimizer(args, model)
+    scheduler = build_scheduler(args, optimizer)
+
+    evaluators = build_evaluators(args)
 
     checkpointer = Checkpointer(args.save_dir)
     last_epoch = 0

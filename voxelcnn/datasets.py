@@ -341,7 +341,7 @@ class Craft3DDataset(Dataset):
             assert timestamp >= last_timestamp
             last_timestamp = timestamp
             coordinate = tuple(np.asarray(coordinate).astype(np.int64).tolist())
-            block_type = np.asarray(block_info, dtype=np.uint8).astype(np.int64)[0]
+            block_type = np.asarray(block_info, dtype=np.int64)[0]
             if action == "B":
                 final_house.pop(coordinate, None)
             else:
@@ -369,5 +369,6 @@ if __name__ == "__main__":
     work_dir = osp.join(osp.dirname(osp.abspath(__file__)), "..")
     dataset = Craft3DDataset(osp.join(work_dir, "data"), "val")
     for i in range(5):
+        breakpoint()
         inputs, targets = dataset[i]
         print(targets)
