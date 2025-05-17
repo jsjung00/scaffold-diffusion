@@ -1,295 +1,205 @@
-#!/usr/bin/env python3
+import os
 
-# Copyright (c) Facebook, Inc. and its affiliates.
-# All rights reserved.
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
-import argparse
-import random
-import warnings
-from datetime import datetime
-from os import path as osp
-from time import time as tic
-
-import numpy as np
+import fsspec
+import hydra
+import lightning as L
+import omegaconf
+import rich.syntax
+import rich.tree
 import torch
-from torch import optim
-from torch.utils.data import DataLoader
-from voxelcnn.checkpoint import Checkpointer
-from voxelcnn.criterions import CrossEntropyLoss
-from voxelcnn.datasets import Craft3DDataset
-from voxelcnn.evaluators import CCA, MTC, Accuracy
-from voxelcnn.models import VoxelCNN
-from voxelcnn.summary import Summary
-from voxelcnn.utils import Section, collate_batches, setup_logger, to_cuda
+
+import dataloader
+import diffusion
+import utils
+
+omegaconf.OmegaConf.register_new_resolver(
+  'cwd', os.getcwd)
+omegaconf.OmegaConf.register_new_resolver(
+  'device_count', torch.cuda.device_count)
+omegaconf.OmegaConf.register_new_resolver(
+  'eval', eval)
+omegaconf.OmegaConf.register_new_resolver(
+  'div_up', lambda x, y: (x + y - 1) // y)
 
 
-def global_setup(args):
-    if args.seed is not None:
-        random.seed(args.seed)
-        np.random.seed(args.seed)
-        torch.manual_seed(args.seed)
-        torch.backends.cudnn.deterministic = True
-    if not args.cpu_only:
-        if not torch.cuda.is_available():
-            warnings.warn("CUDA is not available. Fallback to using CPU only")
-            args.cpu_only = True
-        else:
-            torch.cuda.benchmark = True
+def _load_from_checkpoint(config, tokenizer):
+  if 'hf' in config.backbone:
+    return diffusion.Diffusion(
+      config, tokenizer=tokenizer).to('cuda')
+  
+  return diffusion.Diffusion.load_from_checkpoint(
+    config.eval.checkpoint_path,
+    tokenizer=tokenizer,
+    config=config)
 
 
-def build_data_loaders(args, logger):
-    data_loaders = {}
-    for subset in ("train", "val", "test"):
-        dataset = Craft3DDataset(
-            args.data_dir,
-            subset,
-            max_samples=args.max_samples,
-            next_steps=10,
-            logger=logger,
-        )
-        data_loaders[subset] = DataLoader(
-            dataset,
-            batch_size=args.batch_size,
-            shuffle=subset == "train",
-            num_workers=args.num_workers,
-            pin_memory=not args.cpu_only,
-        )
-    return data_loaders
+@L.pytorch.utilities.rank_zero_only
+def _print_config(
+  config: omegaconf.DictConfig,
+  resolve: bool = True,
+  save_cfg: bool = True) -> None:
+  """Prints content of DictConfig using Rich library and its tree structure.
+  
+  Args:
+    config (DictConfig): Configuration composed by Hydra.
+    resolve (bool): Whether to resolve reference fields of DictConfig.
+    save_cfg (bool): Whether to save the configuration tree to a file.
+  """
+
+  style = 'dim'
+  tree = rich.tree.Tree('CONFIG', style=style, guide_style=style)
+
+  fields = config.keys()
+  for field in fields:
+    branch = tree.add(field, style=style, guide_style=style)
+
+    config_section = config.get(field)
+    branch_content = str(config_section)
+    if isinstance(config_section, omegaconf.DictConfig):
+      branch_content = omegaconf.OmegaConf.to_yaml(
+        config_section, resolve=resolve)
+
+    branch.add(rich.syntax.Syntax(branch_content, 'yaml'))
+  rich.print(tree)
+  if save_cfg:
+    with fsspec.open(
+      '{}/config_tree.txt'.format(
+        config.checkpointing.save_dir), 'w') as fp:
+      rich.print(tree, file=fp)
 
 
-def build_model(args, logger):
-    model = VoxelCNN()
-    if not args.cpu_only:
-        model.cuda()
-    logger.info("Model architecture:\n" + str(model))
-    return model
+@L.pytorch.utilities.rank_zero_only
+def _print_batch(train_ds, valid_ds, tokenizer, k=64):
+  for dl_type, dl in [
+    ('train', train_ds), ('valid', valid_ds)]:
+    print(f'Printing {dl_type} dataloader batch.')
+    batch = next(iter(dl))
+    print('Batch input_ids.shape', batch['input_ids'].shape)
+    first = batch['input_ids'][0, :k]
+    last = batch['input_ids'][0, -k:]
+    print(f'First {k} tokens:', tokenizer.decode(first))
+    print('ids:', first)
+    print(f'Last {k} tokens:', tokenizer.decode(last))
+    print('ids:', last)
 
 
-def build_criterion(args):
-    criterion = CrossEntropyLoss()
-    if not args.cpu_only:
-        criterion.cuda()
-    return criterion
+def generate_samples(config, logger, tokenizer):
+  logger.info('Generating samples.')
+  model = _load_from_checkpoint(config=config,
+                                tokenizer=tokenizer)
+  model.gen_ppl_metric.reset()
+  if config.eval.disable_ema:
+    logger.info('Disabling EMA.')
+    model.ema = None
+  stride_length = config.sampling.stride_length
+  num_strides = config.sampling.num_strides
+  for _ in range(config.sampling.num_sample_batches):
+    if config.sampling.semi_ar:
+      _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
+        stride_length=stride_length,
+        num_strides=num_strides,
+        dt=1 / config.sampling.steps)
+      text_samples = intermediate_samples[-1]
+      # Note: Samples generated using semi-ar method
+      # need to to be processed before computing generative perplexity
+      # since these samples contain numerous <|endoftext|> tokens
+      # and diffusion.compute_generative_perplexity() discards
+      # any text after the first EOS token.
+    else:
+      samples = model.restore_model_and_sample(
+        num_steps=config.sampling.steps)
+      text_samples = model.tokenizer.batch_decode(samples)
+      model.compute_generative_perplexity(text_samples)
+  print('Text samples:', text_samples)
+  if not config.sampling.semi_ar:
+    print('Generative perplexity:',
+          model.gen_ppl_metric.compute())
+  return text_samples
+
+def _ppl_eval(config, logger, tokenizer):
+  logger.info('Starting Zero Shot Eval.')
+
+  model = _load_from_checkpoint(config=config,
+                                tokenizer=tokenizer)
+  if config.eval.disable_ema:
+    logger.info('Disabling EMA.')
+    model.ema = None
+
+  wandb_logger = None
+  if config.get('wandb', None) is not None:
+    wandb_logger = L.pytorch.loggers.WandbLogger(
+      config=omegaconf.OmegaConf.to_object(config),
+      ** config.wandb)
+  callbacks = []
+  if 'callbacks' in config:
+    for _, callback in config.callbacks.items():
+      callbacks.append(hydra.utils.instantiate(callback))
+  trainer = hydra.utils.instantiate(
+    config.trainer,
+    default_root_dir=os.getcwd(),
+    callbacks=callbacks,
+    strategy=hydra.utils.instantiate(config.strategy),
+    logger=wandb_logger)
+  _, valid_ds = dataloader.get_dataloaders(
+    config, tokenizer, skip_train=True, valid_seed=config.seed)
+  trainer.validate(model, valid_ds)
 
 
-def build_optimizer(args, model):
-    no_decay = []
-    decay = []
-    for name, param in model.named_parameters():
-        if name.endswith(".bias"):
-            no_decay.append(param)
-        else:
-            decay.append(param)
-    params = [{"params": no_decay, "weight_decay": 0}, {"params": decay}]
-    return optim.SGD(
-        params,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        momentum=args.momentum,
-        nesterov=True,
-    )
+def _train(config, logger, tokenizer):
+  logger.info('Starting Training.')
+  wandb_logger = None
+  if config.get('wandb', None) is not None:
+    wandb_logger = L.pytorch.loggers.WandbLogger(
+      config=omegaconf.OmegaConf.to_object(config),
+      ** config.wandb)
+
+  if (config.checkpointing.resume_from_ckpt
+      and config.checkpointing.resume_ckpt_path is not None
+      and utils.fsspec_exists(
+        config.checkpointing.resume_ckpt_path)):
+    ckpt_path = config.checkpointing.resume_ckpt_path
+  else:
+    ckpt_path = None
+
+  # Lightning callbacks
+  callbacks = []
+  if 'callbacks' in config:
+    for _, callback in config.callbacks.items():
+      callbacks.append(hydra.utils.instantiate(callback))
+
+  train_ds, valid_ds = dataloader.get_dataloaders(
+    config, tokenizer)
+  _print_batch(train_ds, valid_ds, tokenizer)
+
+  model = diffusion.Diffusion(
+    config, tokenizer=valid_ds.tokenizer)
+
+  trainer = hydra.utils.instantiate(
+    config.trainer,
+    default_root_dir=os.getcwd(),
+    callbacks=callbacks,
+    strategy=hydra.utils.instantiate(config.strategy),
+    logger=wandb_logger)
+  trainer.fit(model, train_ds, valid_ds, ckpt_path=ckpt_path)
 
 
-def build_scheduler(args, optimizer):
-    return optim.lr_scheduler.StepLR(
-        optimizer, step_size=args.step_size, gamma=args.gamma
-    )
+@hydra.main(version_base=None, config_path='configs',
+            config_name='config')
+def main(config):
+  """Main entry point for training."""
+  L.seed_everything(config.seed)
+  _print_config(config, resolve=True, save_cfg=True)
+  
+  logger = utils.get_logger(__name__)
+  tokenizer = dataloader.get_tokenizer(config)
+
+  if config.mode == 'sample_eval':
+    generate_samples(config, logger, tokenizer)
+  elif config.mode == 'ppl_eval':
+    _ppl_eval(config, logger, tokenizer)
+  else:
+    _train(config, logger, tokenizer)
 
 
-def build_evaluators(args):
-    return {
-        "acc@1": Accuracy(next_steps=1),
-        "acc@5": Accuracy(next_steps=5),
-        "acc@10": Accuracy(next_steps=10),
-    }
-
-
-def train(
-    args, epoch, data_loader, model, criterion, optimizer, scheduler, evaluators, logger
-):
-    summary = Summary(logger=logger)
-    model.train()
-    timestamp = tic()
-    for i, (inputs, targets) in enumerate(data_loader):
-        times = {"data": tic() - timestamp}
-        if not args.cpu_only:
-            inputs = to_cuda(inputs)
-            targets = to_cuda(targets)
-        outputs = model(inputs)
-        losses = criterion(outputs, targets)
-        with torch.no_grad():
-            metrics = {k: float(v(outputs, targets)) for k, v in evaluators.items()}
-
-        optimizer.zero_grad()
-        losses["overall_loss"].backward()
-        optimizer.step()
-        try:
-            lr = scheduler.get_last_lr()[0]
-        except Exception:
-            # For backward compatibility
-            lr = scheduler.get_lr()[0]
-
-        times["time"] = tic() - timestamp
-        summary.add(times=times, lrs={"lr": lr}, losses=losses, metrics=metrics)
-        summary.print_current(
-            prefix=f"[{epoch}/{args.num_epochs}][{i + 1}/{len(data_loader)}]"
-        )
-        timestamp = tic()
-    scheduler.step()
-
-
-@torch.no_grad()
-def evaluate(args, epoch, data_loader, model, evaluators, logger):
-    summary = Summary(logger=logger)
-    model.eval()
-    timestamp = tic()
-    batch_results = []
-    for i, (inputs, targets) in enumerate(data_loader):
-        times = {"data": tic() - timestamp}
-        if not args.cpu_only:
-            inputs = to_cuda(inputs)
-            targets = to_cuda(targets)
-        outputs = model(inputs)
-        batch_results.append(
-            {k: v.step(outputs, targets) for k, v in evaluators.items()}
-        )
-
-        times["time"] = tic() - timestamp
-        summary.add(times=times)
-        summary.print_current(
-            prefix=f"[{epoch}/{args.num_epochs}][{i + 1}/{len(data_loader)}]"
-        )
-        timestamp = tic()
-    results = collate_batches(batch_results)
-    metrics = {k: float(v.stop(results[k])) for k, v in evaluators.items()}
-    return metrics
-
-
-def main(args):
-    # Set log file name based on current date and time
-    cur_datetime = datetime.now().strftime("%Y%m%d.%H%M%S")
-    log_path = osp.join(args.save_dir, f"log.{cur_datetime}.txt")
-    logger = setup_logger(save_file=log_path)
-    logger.info(f"Save logs to: {log_path}")
-
-    global_setup(args)
-
-    data_loaders = build_data_loaders(args, logger)
-
-    model = build_model(args, logger)
-
-
-    criterion = build_criterion(args)
-    optimizer = build_optimizer(args, model)
-    scheduler = build_scheduler(args, optimizer)
-
-    evaluators = build_evaluators(args)
-
-    checkpointer = Checkpointer(args.save_dir)
-    last_epoch = 0
-    if args.resume is not None:
-        with Section(f"Resuming from model: {args.resume}", logger=logger):
-            last_epoch = checkpointer.resume(
-                args.resume, model=model, optimizer=optimizer, scheduler=scheduler
-            )
-
-    for epoch in range(last_epoch + 1, args.num_epochs + 1):
-        with Section(f"Training epoch {epoch}", logger=logger):
-            train(
-                args,
-                epoch,
-                data_loaders["train"],
-                model,
-                criterion,
-                optimizer,
-                scheduler,
-                evaluators,
-                logger,
-            )
-        with Section(f"Validating epoch {epoch}", logger=logger):
-            # Evaluate on the validation set by the lightweight accuracy metrics
-            metrics = evaluate(
-                args, epoch, data_loaders["val"], model, evaluators, logger
-            )
-            # Use acc@10 as the key metric to select best model
-            checkpointer.save(model, optimizer, scheduler, epoch, metrics["acc@10"])
-            metrics_str = "  ".join(f"{k}: {v:.3f}" for k, v in metrics.items())
-            best_mark = "*" if epoch == checkpointer.best_epoch else ""
-            logger.info(f"Finish  epoch: {epoch}  {metrics_str} {best_mark}")
-
-    best_epoch = checkpointer.best_epoch
-    with Section(f"Final test with best model from epoch: {best_epoch}", logger=logger):
-        # Load the best model and evaluate all the metrics on the test set
-        checkpointer.load("best", model=model)
-        metrics = evaluate(
-            args, best_epoch, data_loaders["test"], model, evaluators, logger
-        )
-
-        # Additional evaluation metrics. Takes quite long time to evaluate
-        dataset = data_loaders["test"].dataset
-        params = {
-            "local_size": dataset.local_size,
-            "global_size": dataset.global_size,
-            "history": dataset.history,
-        }
-        metrics.update(CCA(**params).evaluate(dataset, model))
-        metrics.update(MTC(**params).evaluate(dataset, model))
-
-        metrics_str = "  ".join(f"{k}: {v:.3f}" for k, v in metrics.items())
-        logger.info(f"Final test from best epoch: {best_epoch}\n{metrics_str}")
-
-
-if __name__ == "__main__":
-    work_dir = osp.dirname(osp.abspath(__file__))
-    parser = argparse.ArgumentParser(
-        description="Train and evaluate VoxelCNN model on 3D-Craft dataset"
-    )
-    # Data
-    parser.add_argument(
-        "--data_dir",
-        type=str,
-        default=osp.join(work_dir, "data"),
-        help="Path to the data directory",
-    )
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size")
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=16,
-        help="Number of workers for preprocessing",
-    )
-    parser.add_argument(
-        "--max_samples",
-        type=int,
-        default=None,
-        help="When debugging, set this option to limit the number of training samples",
-    )
-    # Optimizer
-    parser.add_argument("--lr", type=float, default=0.1, help="Initial learning rate")
-    parser.add_argument(
-        "--weight_decay", type=float, default=0.0001, help="Weight decay"
-    )
-    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum")
-    # Scheduler
-    parser.add_argument("--step_size", type=int, default=5, help="StepLR step size")
-    parser.add_argument("--gamma", type=int, default=0.1, help="StepLR gamma")
-    parser.add_argument("--num_epochs", type=int, default=12, help="Total train epochs")
-    # Misc
-    parser.add_argument(
-        "--save_dir",
-        type=str,
-        default=osp.join(work_dir, "logs"),
-        help="Path to a directory to save log file and checkpoints",
-    )
-    parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="'latest' | 'best' | '<epoch number>' | '<path to a checkpoint>'. "
-        "Default: None, will not resume",
-    )
-    parser.add_argument("--cpu_only", action="store_true", help="Only using CPU")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
-    main(parser.parse_args())
+if __name__ == '__main__':
+  main()
