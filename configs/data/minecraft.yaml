@@ -1,0 +1,4 @@
+data_dir: /home/justinsoljung/voxeldiffusion/data
+max_samples: 5000
+train: minecraft
+valid: minecraft

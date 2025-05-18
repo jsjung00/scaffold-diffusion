@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
-  - /data: openwebtext
+  - /data: minecraft
   - /model: small
   - /strategy: ddp
   - /noise: loglinear
@@ -9,7 +9,7 @@ defaults:
 
 mode: train  # train / ppl_eval / sample_eval
 diffusion: absorbing_state
-backbone: dit  # dit / dimamba / ar
+backbone: unet  # dit / dimamba / ar
 parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
@@ -76,8 +76,8 @@ trainer:
   val_check_interval: 10000
 
 wandb:
-  project: text-diffusion
-  notes: Mulan for text
+  project: voxel-diffusion
+  notes: Voxel diffusion
   group: null
   job_type: null
   name: null

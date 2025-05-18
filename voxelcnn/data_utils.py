@@ -9,7 +9,7 @@ import os
 sys.path.append(str(Path(__file__).parent.parent))
 
 def voxel_tensor_to_nbt(voxel_tens):
-    with open("block_id_map.json") as f:
+    with open("voxelcnn/block_id_map.json") as f:
         id_to_name = json.load(f)
 
     voxel = voxel_tens.detach().numpy()

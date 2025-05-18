@@ -12,12 +12,66 @@ import tarfile
 import warnings
 from os import path as osp
 from typing import Dict, Optional, Tuple
+import sys 
+from pathlib import Path 
+sys.path.append(str(Path(__file__).parent.parent))
 
 import numpy as np
 import requests
 import torch
 from torch.utils.data import Dataset
-from data_utils import voxel_to_nbt
+from voxelcnn.data_utils import voxel_to_nbt
+
+torch.manual_seed(42)
+
+class MinecraftTokenizer:
+    def __init__(self, block_map_file='/home/justinsoljung/voxeldiffusion/voxelcnn/block_id_map.json'):
+        with open(block_map_file, 'r') as f:
+            block_map = json.load(f) #block_id : name 
+
+        pairs = sorted(block_map.items(), key= lambda kv: int(kv[0]))
+        keys, vals = zip(*pairs)  
+        print(f"Confirm that the first val is air: {vals[0]}")   
+
+        self.block_id_token_map = {int(block_id): i for i, block_id in enumerate(keys)} #block_id : token_id
+        new_pairs = sorted(self.block_id_token_map.items())
+        block_ids, token_ids = zip(*new_pairs)
+        block_ids = torch.tensor(block_ids, dtype=torch.long)
+        token_ids = torch.tensor(token_ids, dtype=torch.long)
+
+
+        self.vocab_size = len(self.block_id_token_map)
+        self.mask_token = 0 #make air the mask token 
+
+        # create a map from block_id to token_id by simply doing self.id2token[voxel]
+        max_block_id = max(self.block_id_token_map.keys())
+        id2token = torch.full((max_block_id+1,), fill_value=-1, dtype=torch.long)
+        id2token[block_ids] = token_ids
+        self.id2token = id2token 
+
+        # create a map from token_id to block_id 
+        max_token_id = max(token_ids)
+        token2blockid = torch.full((max_token_id+1,), fill_value=-1, dtype=torch.long)
+        token2blockid[token_ids] = block_ids 
+
+        self.token2blockid = token2blockid
+        
+    
+    def tokenize(self, voxel_tens):
+        '''
+        Takes in a voxel tensor of [B,W,L,H] that contains block_id values and converts to tokens in [0, vocab_len-1]
+
+        Return: voxel tensor of shape [B,W,L,H] that contains token_ids in [0, vocab_len-1]
+        '''
+        return self.id2token[voxel_tens]
+
+    def detokenize(self, voxel_tens):
+        '''
+        Take in voxel tensor of [B,W,L,H] that contains tokens in [0, vocab_len-1]
+
+        Return: voxel tensor of shape [B,W,L,H] that contains block_ids 
+        '''
+        return self.token2blockid[voxel_tens]
 
 
 class Craft3DDataset(Dataset):
@@ -28,6 +82,7 @@ class Craft3DDataset(Dataset):
         self,
         data_dir: str,
         subset: str,
+        tokenizer, 
         voxel_side_len: int = 64, 
         local_size: int = 7,
         global_size: int = 21,
@@ -54,6 +109,7 @@ class Craft3DDataset(Dataset):
         super().__init__()
         self.data_dir = data_dir
         self.subset = subset
+        self.tokenizer = tokenizer
         self.voxel_side_len = voxel_side_len
         self.local_size = local_size
         self.global_size = global_size
@@ -83,13 +139,17 @@ class Craft3DDataset(Dataset):
     def __getitem__(
         self, index: int
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
-        """ Get the index-th valid voxel map containing a house structure 
+        """ Get the index-th valid voxel map containing a house structure and convert to token_ids 
 
         Returns:
             Voxel map tensor of size (voxel_side_len, voxel_side_len, voxel_side_len)
         """
         voxel_map = self._all_houses[index]
-        return voxel_map 
+        if self.tokenizer is not None:
+            voxel_tokens = self.tokenizer.tokenize(voxel_map)
+        else:
+            voxel_tokens = voxel_map
+        return voxel_tokens 
 
     def get_num_houses(self) -> int:
         """ Get the total number of houses. Use for thorough evaluation """
@@ -197,8 +257,23 @@ class Craft3DDataset(Dataset):
 
 if __name__ == "__main__":
     work_dir = osp.join(osp.dirname(osp.abspath(__file__)), "..")
-    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train")
+    tokenizer = MinecraftTokenizer()
+    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
+                             tokenizer=tokenizer)
+
+    no_token_dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
+                             tokenizer=None)
+
+
+
     for i in range(5):
         house = dataset[i]
-        voxel_to_nbt(house, f"house_{i}", True)
-        breakpoint()
+        house_blocks = tokenizer.detokenize(house)
+
+        orig_blocks = no_token_dataset[i]
+
+        assert torch.all(torch.isclose(house_blocks, orig_blocks))
+
+        # Note: need to de-tokenize and get block_ids before saving to nbt 
+        #voxel_to_nbt(house_blocks, f"houseblocks_{i}", True)
+        
