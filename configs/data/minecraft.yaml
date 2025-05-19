@@ -1,4 +1,4 @@
 data_dir: /home/justinsoljung/voxeldiffusion/data
-max_samples: 5000
+max_samples: null  
 train: minecraft
 valid: minecraft

@@ -71,19 +71,6 @@ def _print_config(
             rich.print(tree, file=fp)
 
 
-@L.pytorch.utilities.rank_zero_only
-def _print_batch(train_ds, valid_ds, tokenizer, k=64):
-    for dl_type, dl in [
-            ('train', train_ds), ('valid', valid_ds)]:
-        print(f'Printing {dl_type} dataloader batch.')
-        batch = next(iter(dl))
-        print('Batch input_ids.shape', batch['input_ids'].shape)
-        first = batch['input_ids'][0, :k]
-        last = batch['input_ids'][0, -k:]
-        print(f'First {k} tokens:', tokenizer.decode(first))
-        print('ids:', first)
-        print(f'Last {k} tokens:', tokenizer.decode(last))
-        print('ids:', last)
 
 
 def generate_samples(config, logger, tokenizer):
@@ -142,13 +129,9 @@ def _train(config, logger, tokenizer):
         for _, callback in config.callbacks.items():
             callbacks.append(hydra.utils.instantiate(callback))
 
-    tokenizer = MinecraftTokenizer()
+    train_ds, valid_ds = dataloader.get_dataloaders(
+        config, tokenizer)
 
-    train_ds, valid_ds, test_ds = dataloader.get_dataloaders(
-        config)
-    _print_batch(train_ds, valid_ds, tokenizer)
-
-    breakpoint()
 
     model = diffusion.Diffusion(
         config, tokenizer)
@@ -170,7 +153,7 @@ def main(config):
     _print_config(config, resolve=True, save_cfg=True)
 
     logger = utils.get_logger(__name__)
-    tokenizer = dataloader.get_tokenizer(config)
+    tokenizer = MinecraftTokenizer() # can later play around with changing mask token 
 
     if config.mode == 'sample_eval':
         generate_samples(config, logger, tokenizer)

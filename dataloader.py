@@ -4,16 +4,14 @@ import torch
 import json 
 
 
-def build_data_loaders(config, tokenizer):
-
+def get_dataloaders(config, tokenizer):
     data_loaders = {}
-    for subset in ("train", "val", "test"):
+    for subset in ("train", "val"): #TODO: figure out why "test" fails 
         dataset = Craft3DDataset(
             config.data.data_dir,
             subset,
             tokenizer=tokenizer,
-            max_samples=config.data.data_dir,
-            next_steps=10,
+            max_samples=config.data.max_samples,
         )
         data_loaders[subset] = DataLoader(
             dataset,
@@ -22,4 +20,4 @@ def build_data_loaders(config, tokenizer):
             num_workers=config.loader.num_workers,
             pin_memory=config.loader.pin_memory,
         )
-    return data_loaders
+    return data_loaders['train'], data_loaders['val']

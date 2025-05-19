@@ -41,7 +41,7 @@ class MinecraftTokenizer:
 
 
         self.vocab_size = len(self.block_id_token_map)
-        self.mask_token = 0 #make air the mask token 
+        self.mask_token_id = 0 #make air the mask token 
 
         # create a map from block_id to token_id by simply doing self.id2token[voxel]
         max_block_id = max(self.block_id_token_map.keys())
@@ -87,7 +87,6 @@ class Craft3DDataset(Dataset):
         local_size: int = 7,
         global_size: int = 21,
         history: int = 3,
-        next_steps: int = -1,
         max_samples: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
     ):
@@ -116,7 +115,6 @@ class Craft3DDataset(Dataset):
         self.history = history
         self.max_local_distance = self.local_size // 2
         self.max_global_distance = self.global_size // 2
-        self.next_steps = next_steps
         self.max_samples = max_samples
         self.logger = logger
 
@@ -229,9 +227,6 @@ class Craft3DDataset(Dataset):
             if len(annotation) >= 100 and voxel_map is not None:
                 self._all_houses.append(voxel_map)
                 max_len = max(max_len, len(annotation))
-
-        if self.next_steps <= 0:
-            self.next_steps = max_len
 
     def _load_annotation(self, annotation_path: str) -> torch.Tensor:
         with open(annotation_path, "r") as f:

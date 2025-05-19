@@ -84,7 +84,8 @@ class Diffusion(L.LightningModule):
     self.mask_index = self.tokenizer.mask_token_id
     self.parameterization = self.config.parameterization
     if self.config.backbone == "unet":
-      self.backbone = models.unet.VoxelDiffusionUNet(self.vocab_size, base_feat=64)
+      #TODO: do something smart with config instead of hard coding. Also change the size. 
+      self.backbone = models.unet.UNet3D(in_channels=1, out_channels=self.vocab_size, f_maps=8, num_levels=3) 
     else:
       raise ValueError(
         f'Unknown backbone: {self.config.backbone}')
@@ -187,6 +188,8 @@ class Diffusion(L.LightningModule):
   def on_train_start(self):
     if self.ema:
       self.ema.move_shadow_params_to_device(self.device)
+    
+    return 
     # Adapted from:
     # https://github.com/Dao-AILab/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
     distributed = (
@@ -283,7 +286,7 @@ class Diffusion(L.LightningModule):
     """Returns log score."""
     sigma = self._process_sigma(sigma)
     with torch.cuda.amp.autocast(dtype=torch.float32):
-      logits = self.backbone(x, sigma) #(B,vocab,X,Y,Z)
+      logits = self.backbone(x, sigma) #(B,X,Y,Z,Vocab)
     
     if self.parameterization == 'subs':
       return self._subs_parameterization(logits=logits,
@@ -294,6 +297,8 @@ class Diffusion(L.LightningModule):
                                          sigma=sigma)
     elif self.parameterization == 'd3pm':
       return self._d3pm_parameterization(logits=logits)
+    
+    raise ValueError("Need some parameterization: otherwise the model outputs aren't logits")
     return logits
 
   def _d3pm_loss(self, model_output, xt, x0, t):
@@ -328,11 +333,8 @@ class Diffusion(L.LightningModule):
     return self.T * L_vb
 
   def _compute_loss(self, batch, prefix):
-    if 'attention_mask' in batch:
-      attention_mask = batch['attention_mask']
-    else:
-      attention_mask = None
-    losses = self._loss(batch['input_ids'], attention_mask)
+    attention_mask = None #TODO: can change to add attention mask 
+    losses = self._loss(batch, attention_mask)
     loss = losses.loss
 
     if prefix == 'train':
@@ -452,8 +454,10 @@ class Diffusion(L.LightningModule):
       move_chance: float torch.Tensor with shape (batch_size, 1).
     """
     move_indices = torch.rand(
-      * x.shape, device=x.device) < move_chance
+      *x.shape, device=x.device) < move_chance
+
     xt = torch.where(move_indices, self.mask_index, x)
+
     return xt
 
   def _sample_prior(self, *batch_dims):
@@ -690,10 +694,12 @@ class Diffusion(L.LightningModule):
     else:
       sigma, dsigma = self.noise(t)
       unet_conditioning = sigma[:, None]
-      move_chance = 1 - torch.exp(-sigma[:, None])
+      move_chance = 1 - torch.exp(-sigma)
+
+    move_chance = move_chance.view(move_chance.shape[0], *([1] * (x0.dim() - 1)))
 
     xt = self.q_xt(x0, move_chance)
-    model_output = self.forward(xt, unet_conditioning)
+    model_output = self.forward(xt, unet_conditioning) #(B,X,Y,Z, vocab_len)
     utils.print_nans(model_output, 'model_output')
 
     if self.parameterization == 'sedd':
@@ -701,6 +707,7 @@ class Diffusion(L.LightningModule):
         model_output, sigma[:, None], xt, x0)
     
     if self.T > 0:
+      raise ValueError("Have not fixed code for this yet. Set T == 0")
       diffusion_loss = self._d3pm_loss(
         model_output=model_output, xt=xt, x0=x0, t=t)
       if self.parameterization == 'd3pm':
@@ -713,14 +720,17 @@ class Diffusion(L.LightningModule):
     log_p_theta = torch.gather(
       input=model_output,
       dim=-1,
-      index=x0.unsqueeze(-1)).squeeze(-1)
+      index=x0.unsqueeze(-1)).squeeze(-1) #(B,X,Y,Z) full of logit of correct token id 
     
     if self.change_of_variables or self.importance_sampling:
+      raise ValueError("Not verified yet")
       return log_p_theta * torch.log1p(
         - torch.exp(- self.noise.sigma_min))
+
+    assert len((dsigma / torch.expm1(sigma))[:, None, None, None].shape) == len(log_p_theta.shape)
     
     return - log_p_theta * (
-      dsigma / torch.expm1(sigma))[:, None]
+      dsigma / torch.expm1(sigma))[:, None, None, None]
 
   def _loss(self, x0, attention_mask):
     loss = self._forward_pass_diffusion(x0)
@@ -778,71 +788,4 @@ class Diffusion(L.LightningModule):
     entropy[masked_indices] += pos_term - neg_term + const
     return entropy
 
-  @torch.no_grad
-  def sample_subs_guidance(
-    self, n_samples, stride_length, num_strides, dt=0.001):
-    ones = torch.ones(n_samples, dtype=self.dtype,
-                      device=self.device)
-
-    num_steps = int(1 / dt)
-    sampling_steps = 0
-    intermediate_tokens = []
-    target = None
-    for _ in range(num_strides + 1):
-      p_x0_cache = None
-      x = self._sample_prior(
-        n_samples,
-        self.config.model.length).to(self.device)
-      if target is not None:
-        x[:, : -stride_length] = target
-      for i in range(num_steps + 1):
-        p_x0_cache, x_next = self._ddpm_caching_update(
-          x=x, t=(1 - i * dt) * ones, dt=dt, p_x0=p_x0_cache)
-        if (not torch.allclose(x_next, x)
-            or self.time_conditioning):
-          p_x0_cache = None
-          sampling_steps += 1
-        x = x_next
-      x = self.forward(x, 0 * ones).argmax(dim=-1)
-      intermediate_tokens.append(
-        x[:, :stride_length].cpu().numpy())
-      target = x[:, stride_length:]
-    
-    intermediate_tokens.append(target.cpu().numpy())
-    intermediate_text_samples = []
-    sequence_lengths = ((
-      np.concatenate(intermediate_tokens, axis=1)[:, 1:]
-      == self.tokenizer.eos_token_id).cumsum(-1) == 0).sum(-1)
-    for i in range(2, len(intermediate_tokens) + 1):
-      intermediate_text_samples.append(
-        self.tokenizer.batch_decode(
-          np.concatenate(intermediate_tokens[:i], axis=1)))
-    return (sampling_steps, intermediate_text_samples,
-            sequence_lengths)
-
-  def restore_model_and_semi_ar_sample(
-      self, stride_length, num_strides, dt=0.001):
-    """Generate samples from the model."""
-    # Lightning auto-casting is not working in this method for some reason
-    if self.ema:
-      self.ema.store(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-      self.ema.copy_to(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-    self.backbone.eval()
-    self.noise.eval()
-    (sampling_steps, samples,
-     sequence_lengths) = self.sample_subs_guidance(
-      n_samples=self.config.loader.eval_batch_size,
-      stride_length=stride_length,
-      num_strides=num_strides, 
-      dt=dt)
-    if self.ema:
-      self.ema.restore(itertools.chain(
-        self.backbone.parameters(),
-        self.noise.parameters()))
-    self.backbone.train()
-    self.noise.train()
-    return sampling_steps, samples, sequence_lengths
+ 
