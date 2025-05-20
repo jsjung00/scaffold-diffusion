@@ -7,75 +7,45 @@ from torch.nn import functional as F
 from .unet_se import ChannelSELayer3D, ChannelSpatialSELayer3D, SpatialSELayer3D
 import math 
 
-def get_timestep_embedding(
-    timesteps: torch.Tensor,
-    embedding_dim: int,
-    flip_sin_to_cos: bool = False,
-    downscale_freq_shift: float = 1,
-    scale: float = 1,
-    max_period: int = 10000,
-):
+class TimestepEmbedder(nn.Module):
     """
-    This matches the implementation in Denoising Diffusion Probabilistic Models: Create sinusoidal timestep embeddings.
-
-    Args
-        timesteps (torch.Tensor):
-            a 1-D Tensor of N indices, one per batch element. These may be fractional.
-        embedding_dim (int):
-            the dimension of the output.
-        flip_sin_to_cos (bool):
-            Whether the embedding order should be `cos, sin` (if True) or `sin, cos` (if False)
-        downscale_freq_shift (float):
-            Controls the delta between frequencies between dimensions
-        scale (float):
-            Scaling factor applied to the embeddings.
-        max_period (int):
-            Controls the maximum frequency of the embeddings
-    Returns
-        torch.Tensor: an [N x dim] Tensor of positional embeddings.
+    Embeds scalar timesteps into vector representations.
     """
-    assert len(timesteps.shape) == 1, "Timesteps should be a 1d-array"
-
-    half_dim = embedding_dim // 2
-    exponent = -math.log(max_period) * torch.arange(
-        start=0, end=half_dim, dtype=torch.float32, device=timesteps.device
-    )
-    exponent = exponent / (half_dim - downscale_freq_shift)
-
-    emb = torch.exp(exponent)
-    emb = timesteps[:, None].float() * emb[None, :]
-
-    # scale embeddings
-    emb = scale * emb
-
-    # concat sine and cosine embeddings
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
-    # flip sine and cosine embeddings
-    if flip_sin_to_cos:
-        emb = torch.cat([emb[:, half_dim:], emb[:, :half_dim]], dim=-1)
-
-    # zero pad
-    if embedding_dim % 2 == 1:
-        emb = torch.nn.functional.pad(emb, (0, 1, 0, 0))
-    return emb
-
-class Timesteps(nn.Module):
-    def __init__(self, num_channels: int, flip_sin_to_cos: bool, downscale_freq_shift: float, scale: int = 1):
+    def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
-        self.num_channels = num_channels
-        self.flip_sin_to_cos = flip_sin_to_cos
-        self.downscale_freq_shift = downscale_freq_shift
-        self.scale = scale
+        self.mlp = nn.Sequential(
+            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size, bias=True))
+        self.frequency_embedding_size = frequency_embedding_size
 
-    def forward(self, timesteps):
-        t_emb = get_timestep_embedding(
-            timesteps,
-            self.num_channels,
-            flip_sin_to_cos=self.flip_sin_to_cos,
-            downscale_freq_shift=self.downscale_freq_shift,
-            scale=self.scale,
-        )
+    @staticmethod
+    def timestep_embedding(t, dim, max_period=10000):
+        """
+        Create sinusoidal timestep embeddings.
+        :param t: a 1-D Tensor of N indices, one per batch element.
+                            These may be fractional.
+        :param dim: the dimension of the output.
+        :param max_period: controls the minimum frequency of the embeddings.
+        :return: an (N, D) Tensor of positional embeddings.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+        half = dim // 2
+        freqs = torch.exp(
+            - math.log(max_period)
+            * torch.arange(start=0, end=half, dtype=torch.float32)
+            / half).to(device=t.device)
+        args = t[:, None].float() * freqs[None]
+        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        if dim % 2:
+            embedding = torch.cat(
+            [embedding,
+                torch.zeros_like(embedding[:, :1])], dim=-1)
+        return embedding
+
+    def forward(self, t):
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_emb = self.mlp(t_freq)
         return t_emb
 
 class TimestepEmbedding(nn.Module):
@@ -228,6 +198,7 @@ class SingleConv(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size=3, order='gcr', num_groups=8,
                  padding=1, dropout_prob=0.1, is3d=True):
         super(SingleConv, self).__init__()
+        self.out_channels = out_channels
 
         for name, module in create_conv(in_channels, out_channels, kernel_size, order,
                                         num_groups, padding, dropout_prob, is3d):
@@ -304,22 +275,21 @@ class TimeAwareDoubleConv(DoubleConv):
     '''
     def __init__(self, *args, temb_dim:int, **kwargs):
         super().__init__(*args, **kwargs)
-        out_channels = self.SingleConv1.conv.out_channels # double check 
-
+        out_channels = self.SingleConv1.out_channels
         self.temb_proj = nn.Linear(temb_dim, out_channels)
         self.act = nn.SiLU()
 
     
     def forward(self, x: torch.Tensor, temb: torch.Tensor):
-        h = super(TimeAwareDoubleConv, self).SingleConv1(x) 
+        h = self.SingleConv1(x) 
 
         # injecting time embedding 
-        temb = temb.to(dtype=self.dtype)
-        temb = self.temb_proj(temb)[:,:, None, None, None]
+        temb = temb.to(dtype=next(self.parameters()).dtype)
         temb = self.act(temb)
-        #TODO: could add another linear layer, as in diffusers 
+
+        temb = self.temb_proj(temb)[:,:, None, None, None] # we do one more linear layer than MDLM and diffusers
         h = h + temb 
-        h = super(TimeAwareDoubleConv, self).SingleConv2(h)
+        h = self.SingleConv2(h)
         return h 
 
 
@@ -494,7 +464,11 @@ class Decoder(nn.Module):
 
         if upsample is not None and upsample != 'none':
             if upsample == 'default':
-                if basic_module == DoubleConv:
+                if basic_module == TimeAwareDoubleConv:
+                    upsample = 'trilinear'
+                    concat= True 
+                    adapt_channels = False 
+                elif basic_module == DoubleConv:
                     upsample = 'nearest'  # use nearest neighbor interpolation for upsampling
                     concat = True  # use concat joining
                     adapt_channels = False  # don't adapt channels
@@ -587,7 +561,7 @@ def create_decoders(f_maps, basic_module, conv_kernel_size, conv_padding, layer_
     decoders = []
     reversed_f_maps = list(reversed(f_maps))
     for i in range(len(reversed_f_maps) - 1):
-        if basic_module == DoubleConv and upsample != 'deconv':
+        if (basic_module == TimeAwareDoubleConv or basic_module == DoubleConv) and upsample != 'deconv':
             in_feature_num = reversed_f_maps[i] + reversed_f_maps[i + 1]
         else:
             in_feature_num = reversed_f_maps[i]

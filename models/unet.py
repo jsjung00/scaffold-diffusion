@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import diffusers 
 
 from .unet_utils import number_of_features_per_level
-from .unet_blocks import TimeAwareDoubleConv, create_decoders, create_encoders, Timesteps, TimestepEmbedding
+from .unet_blocks import TimeAwareDoubleConv, create_decoders, create_encoders, TimestepEmbedder, TimestepEmbedding
 
 
 class AbstractUNet(nn.Module):
@@ -146,8 +146,7 @@ class UNet3D(AbstractUNet):
                                      is3d=True,
                                      temb_dim=temb_channels)
 
-
-        self.time_proj = Timesteps(temb_channels, False, 0)
+        self.time_proj = TimestepEmbedder(temb_channels)
         self.act = nn.SiLU()
 
     def forward(self, x, time_tens):
