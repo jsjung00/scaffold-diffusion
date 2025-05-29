@@ -1,41 +1,45 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft
-  - /model: small
+  - /model: unet
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
 
-mode: train  # train / sample_eval
+mode: sample_eval  # train / sample_eval
 diffusion: absorbing_state
 backbone: unet  # dit / dimamba / ar
 parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
+mask_token_id: null # 0 for air 
+air_weight: 0.5 # weighting loss on air token by this ratio  
+overfit: False  #False
 
 seed: 1
 
 loader:
-  global_batch_size: 12
+  global_batch_size: 32
   eval_global_batch_size: ${.global_batch_size}
   # Note: batch_size and eval_batch_size are **per machine**
   batch_size: ${div_up:${.global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
-  eval_batch_size: ${div_up:${.eval_global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  eval_batch_size: 4
   num_workers: ${eval:"len(__import__('os').sched_getaffinity(0))"}
   pin_memory: True
 
 sampling:
   predictor: ddpm_cache  # analytic, ddpm, ddpm_cache
-  steps: 128
+  steps: 1028
   noise_removal: True
   # TODO(yair): @subham, why aren't these params under `eval`?
-  num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
+  num_sample_batches: 1  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
   num_sample_log: 2
   semi_ar: False
   stride_length: 1
   num_strides: 1
+  val_sample_freq: 10
 
 training:
   ema: 0.9999
@@ -45,7 +49,7 @@ training:
   change_of_variables: False
 
 eval:
-  checkpoint_path: ''  # Used to evaluate a checkpoint after training.
+  checkpoint_path: '/home/justinsoljung/voxeldiffusion/outputs/minecraft/2025.05.29/062609/checkpoints/best.ckpt'  
   disable_ema: False
   compute_generative_perplexity: False
   perplexity_batch_size: 8
@@ -55,7 +59,7 @@ eval:
 
 optim:
   weight_decay: 0
-  lr: 3e-4
+  lr: 3e-5
   beta1: 0.9
   beta2: 0.999
   eps: 1e-8
@@ -71,16 +75,16 @@ trainer:
   num_sanity_val_steps: 2
   max_steps: 1_000_000
   log_every_n_steps: 10
-  limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
-  limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
-  check_val_every_n_epoch: 1
+  #limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
+  #limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+  check_val_every_n_epoch: 1 #5
 
 wandb:
   project: voxel-diffusion
   notes: Voxel diffusion
   group: null
   job_type: null
-  name: null
+  name: ${now:%Y.%m.%d}-${now:%H%M%S} 
   id: ${.name}_${seed}
   tags:
     - ${noise.type}

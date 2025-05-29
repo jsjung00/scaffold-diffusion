@@ -10,9 +10,12 @@ import torch
 
 import dataloader
 from voxelcnn.datasets import MinecraftTokenizer
+from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot
 import diffusion
 import utils
 import json 
+from datetime import datetime
+
 
 
 omegaconf.OmegaConf.register_new_resolver(
@@ -26,10 +29,6 @@ omegaconf.OmegaConf.register_new_resolver(
 
 
 def _load_from_checkpoint(config, tokenizer):
-    if 'hf' in config.backbone:
-        return diffusion.Diffusion(
-            config, tokenizer=tokenizer).to('cuda')
-
     return diffusion.Diffusion.load_from_checkpoint(
         config.eval.checkpoint_path,
         tokenizer=tokenizer,
@@ -73,38 +72,39 @@ def _print_config(
 
 
 
-def generate_samples(config, logger, tokenizer):
+def generate_samples(config, logger, tokenizer, save_traj=False):
+    ''' 
+    #TODO: fix. Our output should be a list of voxel maps? that way we can convert to a list of files if we want... 
+    #NOTE: when we de-tokenize mask_id, it will convert to block value -1. You need to decide what block value mask_id should be
+    '''
     logger.info('Generating samples.')
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    save_base_folder = os.path.join(BASE_DIR, "output_files")
+
+    new_folder_path = os.path.join(save_base_folder, datetime.now().strftime('%d-%m-%Y-%H-%M-%S'))
+    print("Making folder:", os.path.abspath(new_folder_path))
+    os.makedirs(new_folder_path, exist_ok=True)
+
     model = _load_from_checkpoint(config=config,
                                   tokenizer=tokenizer)
-    model.gen_ppl_metric.reset()
+
     if config.eval.disable_ema:
         logger.info('Disabling EMA.')
         model.ema = None
-    stride_length = config.sampling.stride_length
-    num_strides = config.sampling.num_strides
-    for _ in range(config.sampling.num_sample_batches):
-        if config.sampling.semi_ar:
-            _, intermediate_samples, _ = model.restore_model_and_semi_ar_sample(
-                stride_length=stride_length,
-                num_strides=num_strides,
-                dt=1 / config.sampling.steps)
-            text_samples = intermediate_samples[-1]
-            # Note: Samples generated using semi-ar method
-            # need to to be processed before computing generative perplexity
-            # since these samples contain numerous <|endoftext|> tokens
-            # and diffusion.compute_generative_perplexity() discards
-            # any text after the first EOS token.
-        else:
-            samples = model.restore_model_and_sample(
-                num_steps=config.sampling.steps)
-            text_samples = model.tokenizer.batch_decode(samples)
-            model.compute_generative_perplexity(text_samples)
-    print('Text samples:', text_samples)
-    if not config.sampling.semi_ar:
-        print('Generative perplexity:',
-              model.gen_ppl_metric.compute())
-    return text_samples
+    
+    for batch_idx in range(config.sampling.num_sample_batches):
+        samples, inter_values = model.restore_model_and_sample(
+            num_steps=config.sampling.steps)
+        if save_traj:
+            raise ValueError("not implemented") 
+        else:        
+            # Save just the first generated structure
+            voxels = model.tokenizer.detokenize(samples[0].detach().cpu())
+            # manually convert all [MASK] tokens to lava 
+            voxels[voxels == -1] = 10
+            voxel_to_nbt(voxels, f"batch{batch_idx}_generated_sample", base_dir=new_folder_path, gzip=True)
+            voxel_to_plot(voxels, f"batch{batch_idx}_generated_sample", base_dir=new_folder_path)
+    return 
 
 
 def _train(config, logger, tokenizer):
@@ -132,6 +132,8 @@ def _train(config, logger, tokenizer):
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
 
+    first_batch = next(iter(train_ds))
+    voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/justinsoljung/voxeldiffusion/output_files')
 
     model = diffusion.Diffusion(
         config, tokenizer)
@@ -149,11 +151,11 @@ def _train(config, logger, tokenizer):
             config_name='config')
 def main(config):
     """Main entry point for training."""
-    L.seed_everything(config.seed)
+    #L.seed_everything(config.seed)
     _print_config(config, resolve=True, save_cfg=True)
 
     logger = utils.get_logger(__name__)
-    tokenizer = MinecraftTokenizer() # can later play around with changing mask token 
+    tokenizer = MinecraftTokenizer(config, config.data.air_not_air) # can later play around with changing mask token 
 
     if config.mode == 'sample_eval':
         generate_samples(config, logger, tokenizer)

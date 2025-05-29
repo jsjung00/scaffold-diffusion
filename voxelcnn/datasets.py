@@ -14,34 +14,53 @@ from os import path as osp
 from typing import Dict, Optional, Tuple
 import sys 
 from pathlib import Path 
+from box import Box
 sys.path.append(str(Path(__file__).parent.parent))
 
 import numpy as np
 import requests
 import torch
 from torch.utils.data import Dataset
-from voxelcnn.data_utils import voxel_to_nbt
+from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot
 
-torch.manual_seed(42)
+#torch.manual_seed(42)
 
 class MinecraftTokenizer:
-    def __init__(self, block_map_file='/home/justinsoljung/voxeldiffusion/voxelcnn/block_id_map.json'):
-        with open(block_map_file, 'r') as f:
-            block_map = json.load(f) #block_id : name 
+    def __init__(self, config, air_not_air=False, block_map_file='/home/justinsoljung/voxeldiffusion/voxelcnn/block_id_map.json'):
+        self.config = config
+        self.air_not_air = air_not_air 
+        
+        if not self.air_not_air:
+            with open(block_map_file, 'r') as f:
+                block_map = json.load(f) #block_id : name 
 
-        pairs = sorted(block_map.items(), key= lambda kv: int(kv[0]))
-        keys, vals = zip(*pairs)  
-        print(f"Confirm that the first val is air: {vals[0]}")   
+            pairs = sorted(block_map.items(), key= lambda kv: int(kv[0]))
+            keys, vals = zip(*pairs)  
+            print(f"Confirm that the first val is air: {vals[0]}")   
 
-        self.block_id_token_map = {int(block_id): i for i, block_id in enumerate(keys)} #block_id : token_id
-        new_pairs = sorted(self.block_id_token_map.items())
-        block_ids, token_ids = zip(*new_pairs)
-        block_ids = torch.tensor(block_ids, dtype=torch.long)
-        token_ids = torch.tensor(token_ids, dtype=torch.long)
+            self.block_id_token_map = {int(block_id): i for i, block_id in enumerate(keys)} #block_id : token_id
+            new_pairs = sorted(self.block_id_token_map.items())
+            block_ids, token_ids = zip(*new_pairs)
+            block_ids = torch.tensor(block_ids, dtype=torch.long)
+            token_ids = torch.tensor(token_ids, dtype=torch.long)
+        else:
+            block_ids = torch.tensor([0,1], dtype=torch.long)
+            token_ids = torch.tensor([0, 1], dtype=torch.long) 
 
+        if self.config.mask_token_id is not None:
+            self.vocab_size = len(self.block_id_token_map)
+            self.mask_token_id = self.config.mask_token_id #make air the mask token 
+        else: #make the mask token id just the largest id
+            self.mask_token_id = len(block_ids)
+            self.vocab_size = len(block_ids) + 1
 
-        self.vocab_size = len(self.block_id_token_map)
-        self.mask_token_id = 0 #make air the mask token 
+        if self.air_not_air:
+            self.id2token = torch.full((self.vocab_size,), fill_value=-1, dtype=torch.long)
+            self.id2token[block_ids] = token_ids
+            self.token2blockid = torch.full((self.vocab_size,), fill_value=-1, dtype=torch.long)
+            self.token2blockid[token_ids] = block_ids
+            return 
+
 
         # create a map from block_id to token_id by simply doing self.id2token[voxel]
         max_block_id = max(self.block_id_token_map.keys())
@@ -89,6 +108,7 @@ class Craft3DDataset(Dataset):
         history: int = 3,
         max_samples: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
+        air_not_air: bool = False 
     ):
         """ Download and construct 3D-Craft dataset
 
@@ -104,6 +124,7 @@ class Craft3DDataset(Dataset):
             faster debugging. Default: None, meaning no limit
         logger (logging.Logger, optional): A logger. Default: None, meaning will print
             to stdout
+            air_not_air (boolean): If true, then house structure has two token IDs, one air and one non-air. 
         """
         super().__init__()
         self.data_dir = data_dir
@@ -117,6 +138,7 @@ class Craft3DDataset(Dataset):
         self.max_global_distance = self.global_size // 2
         self.max_samples = max_samples
         self.logger = logger
+        self.air_not_air = air_not_air
 
         if self.subset not in ("train", "val", "test"):
             raise ValueError(f"Unknown subset: {self.subset}")
@@ -148,6 +170,16 @@ class Craft3DDataset(Dataset):
         else:
             voxel_tokens = voxel_map
         return voxel_tokens 
+
+    def get_percentage_nonair(self) -> int:
+        '''Get the percentage of voxels that are air'''
+        num_non_air = 0 
+        num_total = 0 
+        for voxels in self._all_houses:
+            num_non_air += torch.count_nonzero(voxels)
+            num_total += voxels.numel()
+        return num_non_air / num_total
+
 
     def get_num_houses(self) -> int:
         """ Get the total number of houses. Use for thorough evaluation """
@@ -205,6 +237,9 @@ class Craft3DDataset(Dataset):
         voxels = torch.zeros((self.voxel_side_len,self.voxel_side_len,self.voxel_side_len), dtype=torch.long)
         voxels[new_xyz[:, 0], new_xyz[:, 1], new_xyz[:, 2]] = block_ids
 
+        if self.air_not_air:
+            voxels = (voxels > 0).long()  
+
         return voxels 
         
     def _load_dataset(self):
@@ -252,23 +287,21 @@ class Craft3DDataset(Dataset):
 
 if __name__ == "__main__":
     work_dir = osp.join(osp.dirname(osp.abspath(__file__)), "..")
-    tokenizer = MinecraftTokenizer()
-    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
-                             tokenizer=tokenizer)
+    config = Box({'mask_token_id': None})
+    tokenizer = MinecraftTokenizer(config, air_not_air=True)
+    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=16,\
+                             tokenizer=tokenizer, air_not_air=True, max_samples=1)
+    valdataset = Craft3DDataset(osp.join(work_dir, "data"), "val", voxel_side_len=16,\
+                             tokenizer=tokenizer, air_not_air=True, max_samples=1)
 
-    no_token_dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
-                             tokenizer=None)
-
-
-
+    #no_token_dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
+    #                         tokenizer=None)
+    breakpoint()
     for i in range(5):
         house = dataset[i]
         house_blocks = tokenizer.detokenize(house)
-
-        orig_blocks = no_token_dataset[i]
-
-        assert torch.all(torch.isclose(house_blocks, orig_blocks))
-
+        
+        voxel_to_plot(house_blocks, f"sample{i}", base_dir='/home/justinsoljung/voxeldiffusion/output_files')
         # Note: need to de-tokenize and get block_ids before saving to nbt 
-        #voxel_to_nbt(house_blocks, f"houseblocks_{i}", True)
+        voxel_to_nbt(house_blocks, f"air_not_air_{i}", base_dir='/home/justinsoljung/voxeldiffusion/output_files', gzip=True)
         
