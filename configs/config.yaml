@@ -1,15 +1,15 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft
   - /model: unet
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
 
-mode: sample_eval  # train / sample_eval
+mode: train  # train / sample_eval
 diffusion: absorbing_state
-backbone: unet  # dit / dimamba / ar
+backbone: dit_3d  # unet / dit_3d
 parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
@@ -21,7 +21,7 @@ overfit: False  #False
 seed: 1
 
 loader:
-  global_batch_size: 32
+  global_batch_size: 64
   eval_global_batch_size: ${.global_batch_size}
   # Note: batch_size and eval_batch_size are **per machine**
   batch_size: ${div_up:${.global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
@@ -59,7 +59,7 @@ eval:
 
 optim:
   weight_decay: 0
-  lr: 3e-5
+  lr: 1e-5
   beta1: 0.9
   beta2: 0.999
   eps: 1e-8

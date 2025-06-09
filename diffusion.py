@@ -16,6 +16,7 @@ from data_utils import voxel_to_plot
 
 import dataloader
 import models
+import models.dit3d_window
 import noise_schedule
 import utils
 import os 
@@ -88,6 +89,8 @@ class Diffusion(L.LightningModule):
             self.backbone = models.unet.UNet3D(
                 in_channels=1, out_channels=self.vocab_size, f_maps=self.config.model.f_maps, num_levels=self.config.model.num_levels
             )
+        elif self.config.backbone == "dit_3d":
+            self.backbone = models.dit3d_window.DiT_B_4(vocab_dim=self.vocab_size, input_size=self.config.data.voxel_side_len)
         else:
             raise ValueError(f"Unknown backbone: {self.config.backbone}")
 

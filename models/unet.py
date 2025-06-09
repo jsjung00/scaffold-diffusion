@@ -174,35 +174,6 @@ class UNet3D(AbstractUNet):
         return final_output
     
 
-class VoxelDiffusionUNet(nn.Module):
-    '''
-    Model out input as (B, C=1, W, L, H) and then get from 3DUnet
-    (B, C=base_feat, W, L, H) which we pass to conv3d to get
-    (B, C=vocab_size, W, L, H).
-
-    Return logits in shape (B,X,Y,Z, Vocab_Len)
-    '''
-
-    def __init__(self, vocab_size, base_feat=64):
-        super().__init__()
-        self.backbone = diffusers.UNet3DConditionModel(
-            in_channels=1, out_channels=base_feat
-        )
-        self.head = nn.Conv3d(base_feat, vocab_size, kernel_size=1)
-
-    def forward(self, x, cond=None):
-        if len(x.shape) < 5:
-            x = x.unsqueeze(dim=1) #(B,1, W,L,H)
-
-        #model expects (batch, num_channels, num_frames, height, width)
-        #TODO: need to finish this moded... add in torch permute, figure out how to turn off condiitioning on encoder embeddings....
-
-
-
-        feats = self.backbone(x, cond)["sample"]
-        logits = self.head(feats) #(B,C,W,L,H)
-        return torch.permute(logits, (0, 2,3,4,1))
-
 
 
 
