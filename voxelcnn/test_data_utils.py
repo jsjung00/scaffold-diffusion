@@ -6,7 +6,7 @@ def nbt_test():
     '''
     See what the nbt file looks like
     '''
-    nbt_file = nbtlib.load('/home/justinsoljung/voxeldiffusion/output_files/house_2.nbt')
+    nbt_file = nbtlib.load('/home/jsjung00/voxeldiffusion/output_files/house_2.nbt')
 
     breakpoint()
 

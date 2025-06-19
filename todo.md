@@ -1,3 +1,11 @@
+## First subgoal: getting occupancy maps to work
+- [] VAE + transformer diffusion? as in Trellis
+
+
+
+
+
+
 - [X] Swap in a different UNEt model (don't like black box!)
     - [] If superstitious, permute my data so that it's (B,C=1, Z, H,W)
 
@@ -7,6 +15,7 @@ Okay now that we are training, what should we check
 - [] What happens if air is my mask token? 
     -[] Change code to have mask token be a different ID 
 - [] 
+
 
 
 

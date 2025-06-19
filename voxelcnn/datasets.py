@@ -26,7 +26,7 @@ from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot
 #torch.manual_seed(42)
 
 class MinecraftTokenizer:
-    def __init__(self, config, air_not_air=False, block_map_file='/home/justinsoljung/voxeldiffusion/voxelcnn/block_id_map.json'):
+    def __init__(self, config, air_not_air=False, block_map_file='/home/jsjung00/Desktop/Code/voxeldiffusion/voxelcnn/block_id_map.json'):
         self.config = config
         self.air_not_air = air_not_air 
         
@@ -244,6 +244,7 @@ class Craft3DDataset(Dataset):
         
     def _load_dataset(self):
         splits_path = osp.join(self.data_dir, "splits.json")
+
         if not osp.isfile(splits_path):
             raise RuntimeError(f"Split file not found at: {splits_path}")
 
@@ -301,7 +302,7 @@ if __name__ == "__main__":
         house = dataset[i]
         house_blocks = tokenizer.detokenize(house)
         
-        voxel_to_plot(house_blocks, f"sample{i}", base_dir='/home/justinsoljung/voxeldiffusion/output_files')
+        voxel_to_plot(house_blocks, f"sample{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
         # Note: need to de-tokenize and get block_ids before saving to nbt 
-        voxel_to_nbt(house_blocks, f"air_not_air_{i}", base_dir='/home/justinsoljung/voxeldiffusion/output_files', gzip=True)
+        voxel_to_nbt(house_blocks, f"air_not_air_{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files', gzip=True)
         

@@ -70,8 +70,6 @@ def _print_config(
             rich.print(tree, file=fp)
 
 
-
-
 def generate_samples(config, logger, tokenizer, save_traj=False):
     ''' 
     #TODO: fix. Our output should be a list of voxel maps? that way we can convert to a list of files if we want... 
@@ -133,10 +131,14 @@ def _train(config, logger, tokenizer):
         config, tokenizer)
 
     first_batch = next(iter(train_ds))
-    voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/justinsoljung/voxeldiffusion/output_files')
+    breakpoint()
+    voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
 
-    model = diffusion.Diffusion(
-        config, tokenizer)
+    #model = diffusion.Diffusion(
+    #    config, tokenizer)
+
+    #TODO: finish the VAE model
+
 
     trainer = hydra.utils.instantiate(
         config.trainer,
