@@ -1,21 +1,30 @@
 import torch 
 import torch.nn.functional as F 
-import pytorch_lightning as pl 
+import lightning as L
 from typing import Dict, Any, Tuple 
 from easydict import EasyDict 
+import itertools 
+import hydra 
 
+from sparse_vae.vae import SparseStructureEncoder, SparseStructureDecoder
 
-class SparseStructureVAE(pl.LightningModule):
+class SparseStructureVAE(L.LightningModule):
     def __init__(
         self, 
-        encoder,
-        decoder, 
         config 
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=['encoder', 'decoder'])
-        self.encoder = encoder 
-        self.decoder = decoder 
+        self.save_hyperparameters()
+        self.encoder = SparseStructureEncoder(in_channels=config.model.encoder.in_channels,\
+                                                latent_channels=config.model.encoder.latent_channels,\
+                                                num_res_blocks=config.model.encoder.num_res_blocks,\
+                                                num_res_blocks_middle=config.model.encoder.num_res_blocks_middle,\
+                                                channels=config.model.encoder.channels)  
+        self.decoder = SparseStructureDecoder(out_channels=config.model.decoder.out_channels,\
+                                                latent_channels=config.model.decoder.latent_channels,\
+                                                num_res_blocks=config.model.decoder.num_res_blocks,\
+                                                num_res_blocks_middle=config.model.decoder.num_res_blocks_middle,\
+                                                channels=config.model.decoder.channels)
         self.config = config 
         self.lambda_kl = self.config.model.lambda_kl
 
@@ -23,25 +32,46 @@ class SparseStructureVAE(pl.LightningModule):
         '''
         batch: [N x 1 x H x W x D] tensor of binary sparse structure.
         '''
-        # TODO: may need to unpack batch, convert to float datatype
         z, mean, logvar = self.encoder(batch, sample_posterior=True, return_raw=True)
         logits = self.decoder(z)
         loss_dict = EasyDict(loss = 0.0)
         if self.config.model.loss_type == 'bce':
-            loss_dict['bce'] = F.binary_cross_entropy_with_logits(logits, batch, reduction='mean') 
-            loss_dict['loss'] = loss_dict['loss'] + loss_dict['bce']
+            recon_loss = F.binary_cross_entropy_with_logits(logits, batch, reduction='none')             
+            loss_dict['recon_loss'] = recon_loss.mean()
         elif self.config.model.loss_type == 'l1':
-            loss_dict['l1'] = F.l1_loss(F.sigmoid(logits), batch, reduction='mean')
-            loss_dict['loss'] = loss_dict['loss'] + loss_dict['l1']
+            recon_loss = F.l1_loss(F.sigmoid(logits), batch, reduction='none')
+            loss_dict['recon_loss'] = recon_loss.mean()
         elif self.config.model.loss_type == 'dice':
+            #TODO: handle no reduction
             logits = F.sigmoid(logits)
-            loss_dict['dice'] = 1 - (2 * (logits * batch).sum() + 1 ) / (logits.sum()+ batch.sum()+ 1)
-            loss_dict['loss'] = loss_dict['loss'] + loss_dict['dice']
+            recon_loss = 1 - (2 * (logits * batch).sum() + 1 ) / (logits.sum()+ batch.sum()+ 1)
+            loss_dict['recon_loss'] = recon_loss 
         else:
             raise ValueError(f"Invalid loss type")
+
+        non_air_mask = (batch > 0).float()
+        non_air_nlls = non_air_mask * recon_loss 
         
-        loss_dict['kl'] = 0.5 * torch.mean(mean.pow(2) + logvar.exp() - logvar - 1)
-        loss_dict['loss'] = loss_dict['loss'] + self.lambda_kl  * loss_dict['kl'] 
+        air_mask = (batch == 0).float()
+        air_nlls = air_mask * recon_loss 
+
+        non_air_nll = non_air_nlls.sum() / torch.clamp(non_air_mask.sum(), min=1)
+        air_nll = air_nlls.sum() / torch.clamp(air_mask.sum(), min=1)
+
+        # calculate accuracy
+        same_value = ((F.sigmoid(logits) >= 0.5) == batch) 
+        air_acc = (air_mask * same_value).sum() / torch.clamp(air_mask.sum(), min=1)
+        nonair_acc = (non_air_mask * same_value).sum() / torch.clamp(non_air_mask.sum(), min=1)
+
+        weighted_nll = self.config.air_weight * air_nll + (1- self.config.air_weight) * non_air_nll 
+        
+        loss_dict['air_acc'] = air_acc
+        loss_dict['nonair_acc'] = nonair_acc 
+        loss_dict['air_recon_loss']= air_nll
+        loss_dict['nonair_recon_loss'] = non_air_nll 
+        loss_dict['weighted_recon_loss'] = weighted_nll
+        loss_dict['kl_loss'] = 0.5 * torch.mean(mean.pow(2) + logvar.exp() - logvar - 1)
+        loss_dict['loss'] = weighted_nll + self.lambda_kl  * loss_dict['kl_loss'] 
 
         return loss_dict 
 
@@ -56,8 +86,14 @@ class SparseStructureVAE(pl.LightningModule):
         loss = loss_dict['loss']
 
         # log losses
-        self.log('train_log', loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True)
         self.log('train_recon_loss', loss_dict['recon_loss'], on_step=True, on_epoch=True)
+        self.log('train_weight_recon_loss', loss_dict['weighted_recon_loss'], on_step=True, on_epoch=True)
+        self.log('train_air_recon_loss', loss_dict['air_recon_loss'], on_step=True, on_epoch=True)
+        self.log('train_nonair_recon_loss', loss_dict['nonair_recon_loss'], on_step=True, on_epoch=True)
+        self.log('train_air_acc', loss_dict['air_acc'], on_step=True, on_epoch=True)
+        self.log('train_nonair_acc', loss_dict['nonair_acc'], on_step=True, on_epoch=True)
+        
         self.log('train_kl_loss', loss_dict['kl_loss'], on_step=True, on_epoch=True)
         return loss  
     
@@ -71,9 +107,14 @@ class SparseStructureVAE(pl.LightningModule):
         loss_dict = self.compute_loss(batch)
         loss = loss_dict['loss']
 
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('val_recon_loss', loss_dict['recon_loss'], on_step=False, on_epoch=True)
+        self.log('val_air_recon_loss', loss_dict['air_recon_loss'], on_step=False, on_epoch=True)
+        self.log('val_nonair_recon_loss', loss_dict['nonair_recon_loss'], on_step=False, on_epoch=True)
+        self.log('val_weight_recon_loss', loss_dict['weighted_recon_loss'], on_step=False, on_epoch=True)
         self.log('val_kl_loss', loss_dict['kl_loss'], on_step=False, on_epoch=True)
+        self.log('val_air_acc', loss_dict['air_acc'], on_step=False, on_epoch=True)
+        self.log('val_nonair_acc', loss_dict['nonair_acc'], on_step=False, on_epoch=True)
         
         return loss 
 
@@ -96,6 +137,32 @@ class SparseStructureVAE(pl.LightningModule):
             "name": "trainer/lr",
         }
         return [optimizer], [scheduler_dict]
+
+    def encode(self, batch, sample=False):
+        '''
+        batch: (B,1,H,W,D)
+        '''
+        if len(batch.shape) < 5:
+            batch = torch.unsqueeze(batch, dim=1)
+        
+        batch = batch.float()
+        z = self.encoder(batch, sample_posterior=sample, return_raw=False)
+        return z
+    
+    def reconstruct(self, batch, sample=False):
+        batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
+        batch = batch.float() 
+        z = self.encoder(batch, sample_posterior=sample, return_raw=False)
+        # TODO: check how the Trellis paper uses the VAE; do they sample and then get latents?
+        
+        logits = self.decoder(z)
+        probs = F.sigmoid(logits)
+        same_value = ((probs >= 0.5) == batch) 
+        recon = (probs >= 0.5)
+
+        return recon, same_value 
+
+
     
 
 

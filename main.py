@@ -11,10 +11,21 @@ import torch
 import dataloader
 from voxelcnn.datasets import MinecraftTokenizer
 from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot
+from sparse_vae.vae_lightning import SparseStructureVAE
+from sparse_vae.diffusion_lightning import GaussianDDPM
+from callbacks.ema import EMA
 import diffusion
 import utils
 import json 
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
+os.environ['DISPLAY'] = ''  # Disable display
+os.environ['MPLBACKEND'] = 'Agg'  # Force matplotlib backend
+os.environ['WANDB_SILENT'] = 'true'
+os.environ['WANDB_CONSOLE'] = 'off'
+
+
 
 
 
@@ -127,18 +138,23 @@ def _train(config, logger, tokenizer):
         for _, callback in config.callbacks.items():
             callbacks.append(hydra.utils.instantiate(callback))
 
+    if config.training.use_ema:
+        callbacks.append(EMA(config.training.ema))
+        pass 
+
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
 
     first_batch = next(iter(train_ds))
-    breakpoint()
-    voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
+    
+    #voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
 
     #model = diffusion.Diffusion(
     #    config, tokenizer)
 
     #TODO: finish the VAE model
-
+    #model = SparseStructureVAE(config) 
+    model = GaussianDDPM(config)
 
     trainer = hydra.utils.instantiate(
         config.trainer,

@@ -1,2 +1,5 @@
+model_name: unet
+
+
 f_maps: 2 #64 
 num_levels: 2 #4

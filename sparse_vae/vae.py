@@ -3,9 +3,24 @@ from typing import *
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F 
-from ..modules.norm import GroupNorm32, ChannelLayerNorm32
-from ..modules.spatial import pixel_shuffle_3d 
-from ..modules.utils import zero_module, convert_module_to_f16, convert_module_to_f32
+import sys 
+from pathlib import Path 
+sys.path.append(str(Path(__file__).parent))
+
+from modules.norm import GroupNorm32, ChannelLayerNorm32
+from modules.spatial import pixel_shuffle_3d 
+from modules.utils import zero_module, convert_module_to_f16, convert_module_to_f32
+
+def norm_layer(norm_type: str, *args, **kwargs):
+    """
+    Return a normalization layer.
+    """
+    if norm_type == "group":
+        return GroupNorm32(32, *args, **kwargs)
+    elif norm_type == "layer":
+        return ChannelLayerNorm32(*args, **kwargs)
+    else:
+        raise ValueError(f"Invalid norm type {norm_type}")
 
 class ResBlock3d(nn.Module):
     def __init__(
@@ -57,6 +72,31 @@ class DownsampleBlock3d(nn.Module):
             return self.conv(x)
         else:
             return F.avg_pool3d(x, 2)
+
+class UpsampleBlock3d(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mode: Literal["conv", "nearest"] = "conv",
+    ):
+        assert mode in ["conv", "nearest"], f"Invalid mode {mode}"
+
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        if mode == "conv":
+            self.conv = nn.Conv3d(in_channels, out_channels*8, 3, padding=1)
+        elif mode == "nearest":
+            assert in_channels == out_channels, "Nearest mode requires in_channels to be equal to out_channels"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if hasattr(self, "conv"):
+            x = self.conv(x)
+            return pixel_shuffle_3d(x, 2)
+        else:
+            return F.interpolate(x, scale_factor=2, mode="nearest")
 
 class SparseStructureEncoder(nn.Module):
     """

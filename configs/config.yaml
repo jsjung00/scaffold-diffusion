@@ -2,7 +2,7 @@ defaults:
   - _self_
   - /callbacks: [checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft
-  - /model: unet
+  - /model: latent_diffusion
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
@@ -18,15 +18,21 @@ mask_token_id: null # 0 for air
 air_weight: 0.5 # weighting loss on air token by this ratio  
 overfit: False  #False
 
+# naming
+model_name: latent_diffusion 
+
 seed: 1
+
+latent:
+  encoder_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt
 
 loader:
   global_batch_size: 64
-  eval_global_batch_size: ${.global_batch_size}
+  eval_global_batch_size: 64
   # Note: batch_size and eval_batch_size are **per machine**
-  batch_size: ${div_up:${.global_batch_size}, ${eval:${trainer.devices} * ${trainer.num_nodes}}}
+  batch_size: 64
   eval_batch_size: 4
-  num_workers: ${eval:"len(__import__('os').sched_getaffinity(0))"}
+  num_workers: 16
   pin_memory: True
 
 sampling:
@@ -42,6 +48,7 @@ sampling:
   val_sample_freq: 10
 
 training:
+  use_ema: True 
   ema: 0.9999
   antithetic_sampling: True
   importance_sampling: False
@@ -68,8 +75,8 @@ trainer:
   _target_: lightning.Trainer
   accelerator: cuda
   num_nodes: 1
-  devices: ${device_count:}
-  accumulate_grad_batches: ${div_up:${loader.global_batch_size}, ${eval:${trainer.devices} * ${loader.batch_size} * ${trainer.num_nodes}}}
+  devices: 1
+  accumulate_grad_batches: 1
   gradient_clip_val: 1.0
   precision: 'bf16'
   num_sanity_val_steps: 2

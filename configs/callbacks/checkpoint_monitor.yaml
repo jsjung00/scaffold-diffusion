@@ -5,6 +5,6 @@ checkpoint_monitor:
   save_top_k: 1 # save k best models (determined by above metric)
   save_last: True # True = additionally always save model from last epoch
   dirpath: ${checkpointing.save_dir}/checkpoints
-  filename: best
+  filename: ${model_name}_best
   auto_insert_metric_name: False
   verbose: True

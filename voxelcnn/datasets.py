@@ -108,7 +108,8 @@ class Craft3DDataset(Dataset):
         history: int = 3,
         max_samples: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
-        air_not_air: bool = False 
+        air_not_air: bool = False,
+        middle_crop: bool = False   
     ):
         """ Download and construct 3D-Craft dataset
 
@@ -125,6 +126,7 @@ class Craft3DDataset(Dataset):
         logger (logging.Logger, optional): A logger. Default: None, meaning will print
             to stdout
             air_not_air (boolean): If true, then house structure has two token IDs, one air and one non-air. 
+            middle_crop: (Bool) If true, crop the middle voxel_side_len**3 of the house structure and fill rest with zeros
         """
         super().__init__()
         self.data_dir = data_dir
@@ -139,6 +141,7 @@ class Craft3DDataset(Dataset):
         self.max_samples = max_samples
         self.logger = logger
         self.air_not_air = air_not_air
+        self.middle_crop = middle_crop 
 
         if self.subset not in ("train", "val", "test"):
             raise ValueError(f"Unknown subset: {self.subset}")
