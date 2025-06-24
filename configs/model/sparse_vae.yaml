@@ -1,7 +1,7 @@
 model_name: sparse_vae 
 
 loss_type: bce 
-lambda_kl: 0.000001
+lambda_kl: 1 #0.000001
 
 encoder:
   in_channels: 1

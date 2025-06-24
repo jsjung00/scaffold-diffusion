@@ -2,7 +2,7 @@ defaults:
   - _self_
   - /callbacks: [checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft
-  - /model: latent_diffusion
+  - /model: latent_diffusion #latent_diffusion / sparse_vae
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
@@ -19,19 +19,21 @@ air_weight: 0.5 # weighting loss on air token by this ratio
 overfit: False  #False
 
 # naming
-model_name: latent_diffusion 
+model_name: latent_diffusion #latent_diffusion / sparse_vae 
 
 seed: 1
 
 latent:
-  encoder_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt
+  vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/165728/checkpoints/sparse_vae_best.ckpt
+  #vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt
+  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.21/182705/checkpoints/latent_diffusion_best.ckpt
 
 loader:
-  global_batch_size: 64
-  eval_global_batch_size: 64
+  global_batch_size: 5
+  eval_global_batch_size: 5
   # Note: batch_size and eval_batch_size are **per machine**
-  batch_size: 64
-  eval_batch_size: 4
+  batch_size: 5
+  eval_batch_size: 5
   num_workers: 16
   pin_memory: True
 
@@ -78,7 +80,7 @@ trainer:
   devices: 1
   accumulate_grad_batches: 1
   gradient_clip_val: 1.0
-  precision: 'bf16'
+  precision: '32-true' # bf16-mixed / 32-true 
   num_sanity_val_steps: 2
   max_steps: 1_000_000
   log_every_n_steps: 10

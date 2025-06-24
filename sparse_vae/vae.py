@@ -128,8 +128,9 @@ class SparseStructureEncoder(nn.Module):
         self.channels = channels
         self.num_res_blocks_middle = num_res_blocks_middle
         self.norm_type = norm_type
-        self.use_fp16 = use_fp16
-        self.dtype = torch.float16 if use_fp16 else torch.float32
+        self.use_fp16 = use_fp16 
+        #self.dtype = torch.bfloat16 #NOTE: this needs to change based on precision that you are training lightning with 
+        #self.dtype = torch.float16 if use_fp16 else torch.float32
 
         self.input_layer = nn.Conv3d(in_channels, channels[0], 3, padding=1)
 
@@ -154,9 +155,11 @@ class SparseStructureEncoder(nn.Module):
             nn.SiLU(),
             nn.Conv3d(channels[-1], latent_channels*2, 3, padding=1)
         )
+    
+    def set_dtype(self, dtype):
+        self.dtype = dtype
+        self.to(dtype)
 
-        if use_fp16:
-            self.convert_to_fp16()
 
     @property
     def device(self) -> torch.device:
@@ -239,7 +242,8 @@ class SparseStructureDecoder(nn.Module):
         self.num_res_blocks_middle = num_res_blocks_middle
         self.norm_type = norm_type
         self.use_fp16 = use_fp16
-        self.dtype = torch.float16 if use_fp16 else torch.float32
+        #self.dtype = torch.bfloat16
+        #self.dtype = torch.float16 if use_fp16 else torch.float32
 
         self.input_layer = nn.Conv3d(latent_channels, channels[0], 3, padding=1)
 
@@ -265,8 +269,11 @@ class SparseStructureDecoder(nn.Module):
             nn.Conv3d(channels[-1], out_channels, 3, padding=1)
         )
 
-        if use_fp16:
-            self.convert_to_fp16()
+        #if use_fp16:
+        #    self.convert_to_fp16()
+    def set_dtype(self, dtype):
+        self.dtype = dtype
+        self.to(dtype)
 
     @property
     def device(self) -> torch.device:

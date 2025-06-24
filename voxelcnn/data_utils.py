@@ -27,7 +27,7 @@ def voxel_to_plot(voxel_tens, file_name, base_dir=None):
     os.makedirs(base_dir, exist_ok=True)
     out_path = base_dir / f"{file_name}_matplot.png"
 
-    voxels = voxel_tens.detach().numpy()
+    voxels = voxel_tens.detach().cpu().numpy()
     occupancy = voxels.astype(bool)
     occupancy = np.transpose(voxels, (0, 2, 1)).astype(bool)
 

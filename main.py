@@ -138,7 +138,7 @@ def _train(config, logger, tokenizer):
         for _, callback in config.callbacks.items():
             callbacks.append(hydra.utils.instantiate(callback))
 
-    if config.training.use_ema:
+    if config.training.use_ema and config.model.model_name == "latent_diffusion":
         callbacks.append(EMA(config.training.ema))
         pass 
 
@@ -151,8 +151,6 @@ def _train(config, logger, tokenizer):
 
     #model = diffusion.Diffusion(
     #    config, tokenizer)
-
-    #TODO: finish the VAE model
     #model = SparseStructureVAE(config) 
     model = GaussianDDPM(config)
 
@@ -160,7 +158,7 @@ def _train(config, logger, tokenizer):
         config.trainer,
         default_root_dir=os.getcwd(),
         callbacks=callbacks,
-        strategy=hydra.utils.instantiate(config.strategy),
+        strategy="auto",
         logger=wandb_logger)
     trainer.fit(model, train_ds, valid_ds, ckpt_path=ckpt_path)
 

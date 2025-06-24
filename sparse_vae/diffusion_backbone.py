@@ -52,6 +52,8 @@ class TimestepEmbedder(nn.Module):
 
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        # align data with parameter type 
+        t_freq = t_freq.to(next(self.mlp.parameters()).dtype) 
         t_emb = self.mlp(t_freq)
         return t_emb
 
@@ -82,7 +84,7 @@ class SparseStructureDiffusionModel(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.share_mod = share_mod
         self.qk_rms_norm_cross = qk_rms_norm_cross
-        self.dtype = torch.float16 if self.use_fp16 else torch.float32
+        #self.dtype = torch.float16 if self.use_fp16 else torch.float32
 
         self.t_embedder = TimestepEmbedder(self.model_channels)
         if self.share_mod:
@@ -117,8 +119,12 @@ class SparseStructureDiffusionModel(nn.Module):
         self.out_layer = nn.Linear(self.model_channels, self.out_channels * self.patch_size**3)
 
         self.initialize_weights()
-        if self.use_fp16:
-            self.convert_to_fp16()
+        #if self.use_fp16:
+        #    self.convert_to_fp16()
+    
+    def set_dtype(self, dtype):
+        self.dtype = dtype
+        self.to(dtype)
 
     @property
     def device(self) -> torch.device:

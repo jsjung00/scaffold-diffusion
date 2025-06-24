@@ -1,6 +1,6 @@
 model_name: latent_diffusion
 
-noise_steps: 4000  # T
+noise_steps: 1000  # T
 ema: true  # exponential moving average
 ema_decay: 0.99  # exponential moving average decay rate
 lambda_variational: 0.0001
@@ -10,9 +10,9 @@ init_step_vlb: 1000
 input_channels: 8  #NOTE: should be same as sparse_vae.yaml latent_channels
 
 scheduler:
-  beta_start: 0.000025
-  beta_end: 0.005
-  T: 4000 # ensure this is the same as T above
+  beta_start: 0.0001 #0.000025
+  beta_end: 0.02 #0.005
+  T: 1000 #4000 # NOTE: ensure this is the same as T above
 
 
 backbone:

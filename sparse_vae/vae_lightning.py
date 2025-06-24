@@ -28,10 +28,19 @@ class SparseStructureVAE(L.LightningModule):
         self.config = config 
         self.lambda_kl = self.config.model.lambda_kl
 
+    def set_dtype(self, dtype):
+        self.dtype = dtype
+        self.to(dtype)
+    
+    def setup(self, stage=None):
+        self.encoder.set_dtype(self.dtype)
+        self.decoder.set_dtype(self.dtype)
+
     def compute_loss(self, batch):
         '''
         batch: [N x 1 x H x W x D] tensor of binary sparse structure.
         '''
+        batch.to(self.dtype)
         z, mean, logvar = self.encoder(batch, sample_posterior=True, return_raw=True)
         logits = self.decoder(z)
         loss_dict = EasyDict(loss = 0.0)
@@ -49,10 +58,10 @@ class SparseStructureVAE(L.LightningModule):
         else:
             raise ValueError(f"Invalid loss type")
 
-        non_air_mask = (batch > 0).float()
+        non_air_mask = (batch > 0).to(self.dtype)
         non_air_nlls = non_air_mask * recon_loss 
         
-        air_mask = (batch == 0).float()
+        air_mask = (batch == 0).to(self.dtype)
         air_nlls = air_mask * recon_loss 
 
         non_air_nll = non_air_nlls.sum() / torch.clamp(non_air_mask.sum(), min=1)
@@ -80,7 +89,7 @@ class SparseStructureVAE(L.LightningModule):
         batch: sparse binary occupancy map. (B, H, W, D)
         '''
         batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
-        batch = batch.float() 
+        batch = batch.to(self.dtype) 
 
         loss_dict = self.compute_loss(batch)
         loss = loss_dict['loss']
@@ -102,7 +111,7 @@ class SparseStructureVAE(L.LightningModule):
         batch: sparse binary occupancy map. (B, H, W, D)
         '''
         batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
-        batch = batch.float() 
+        batch = batch.to(self.dtype) 
         
         loss_dict = self.compute_loss(batch)
         loss = loss_dict['loss']
@@ -145,15 +154,20 @@ class SparseStructureVAE(L.LightningModule):
         if len(batch.shape) < 5:
             batch = torch.unsqueeze(batch, dim=1)
         
-        batch = batch.float()
+        batch = batch.to(self.dtype)
         z = self.encoder(batch, sample_posterior=sample, return_raw=False)
         return z
+
+    def decode(self, z):
+        logits = self.decoder(z)
+        probs = F.sigmoid(logits)
+        recon = (probs >= 0.5)
+        return recon 
     
     def reconstruct(self, batch, sample=False):
         batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
-        batch = batch.float() 
+        batch = batch.to(self.dtype) 
         z = self.encoder(batch, sample_posterior=sample, return_raw=False)
-        # TODO: check how the Trellis paper uses the VAE; do they sample and then get latents?
         
         logits = self.decoder(z)
         probs = F.sigmoid(logits)

@@ -34,6 +34,7 @@ class GaussianDDPM(L.LightningModule):
         :param init_step_vlb: the step at which the variational lower bound is included into the loss function
         """
         super().__init__()
+        self.save_hyperparameters()
         self.config = config 
         self.input_channels = config.model.input_channels
         #TODO: define denoiser module 
@@ -46,6 +47,7 @@ class GaussianDDPM(L.LightningModule):
 
         self.var_scheduler = LinearScheduler(T = self.scheduler_config.T, beta_start = self.scheduler_config.beta_start,\
             beta_end = self.scheduler_config.beta_end)
+    
             
         self.lambda_variational = self.config.model.lambda_variational
         self.register_buffer('alphas_hat', self.var_scheduler.get_alpha_hat())
@@ -67,9 +69,23 @@ class GaussianDDPM(L.LightningModule):
         self.init_step_vlb = max(1, self.init_step_vlb)
 
         # VAE encoder
-        encoder_path = self.config.latent.encoder_ckpt
-        self.vae_model = SparseStructureVAE.load_from_checkpoint(encoder_path)
+        vae_path = self.config.latent.vae_ckpt
+        self.vae_model = SparseStructureVAE.load_from_checkpoint(vae_path)
         self.vae_model.eval()
+        for p in self.vae_model.parameters():
+            p.requires_grad = False
+
+    def setup(self, stage, dtype=None):
+        if dtype is None:
+            self.denoiser_module.set_dtype(self.dtype)
+            self.vae_model.to(self.dtype)
+            self.vae_model.encoder.set_dtype(self.dtype)
+            self.vae_model.decoder.set_dtype(self.dtype)
+        else:
+            self.denoiser_module.set_dtype(dtype)
+            self.vae_model.to(dtype)
+            self.vae_model.encoder.set_dtype(dtype)
+            self.vae_model.decoder.set_dtype(dtype)
 
 
 
@@ -98,7 +114,7 @@ class GaussianDDPM(L.LightningModule):
             Dictionary containing the loss.
         """
         batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
-        batch = batch.float() 
+        batch = batch.to(self.device)
         with torch.no_grad():
             X = self.vae_model.encode(batch) #get dense latent (B,C,D,D,D)
         
@@ -133,7 +149,7 @@ class GaussianDDPM(L.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         batch = torch.unsqueeze(batch, dim=1) #(B,1,H,W,D)
-        batch = batch.float() 
+        batch = batch.to(self.device)
         with torch.no_grad():
             X = self.vae_model.encode(batch) #get dense latent (B,C,D,D,D)
 
@@ -185,7 +201,7 @@ class GaussianDDPM(L.LightningModule):
                                             self.betas, self.alphas),\
                                             sigma_x_t(v,t, self.betas_hat, self.betas))
             
-            vlb += -p.log_prob(x_0) * t_eq_0.float()
+            vlb += -p.log_prob(x_0) * t_eq_0.to(self.device)
         
         t_eq_last = (t == (self.T - 1)).reshape(-1, 1, 1, 1, 1)
 
@@ -194,7 +210,7 @@ class GaussianDDPM(L.LightningModule):
             p = torch.distributions.Normal(0,1)
             q = torch.distributions.Normal(sqrt(self.alphas_hat[t]) * x_0, (1-self.alphas_hat[t]))
 
-            vlb += torch.distributions.kl_divergence(q,p) * t_eq_last.float()
+            vlb += torch.distributions.kl_divergence(q,p) * t_eq_last.to(self.device)
         
         # compute variational loss for other time steps
         mu_hat = mu_hat_xt_x0(x_t, x_0, t, self.alphas_hat, self.alphas, self.betas)
@@ -204,7 +220,7 @@ class GaussianDDPM(L.LightningModule):
         mu = mu_x_t(x_t, t, model_noise, self.alphas_hat, self.betas, self.alphas).detach()
         sigma = sigma_x_t(v, t, self.betas_hat, self.betas)
         p = torch.distributions.Normal(mu, sigma)
-        vlb += torch.distributions.kl_divergence(q, p) * (~t_eq_last).float() * (~t_eq_0).float()
+        vlb += torch.distributions.kl_divergence(q, p) * (~t_eq_last).to(self.device) * (~t_eq_0).to(self.device)
 
         return vlb 
     
@@ -226,7 +242,56 @@ class GaussianDDPM(L.LightningModule):
         }
         return [optimizer], [scheduler_dict]
 
-        #eturn self.opt_class(params=self.parameters())
+    #TODO: add diffferent sampling schedulers 
+    def generate(self, T=None, batch_size=1, get_intermediate_steps=False):
+        # move transformer backbone to bf16 because of fast_attn NOTE: assumes that we use fast_attn bf16
+        #self.denoiser_module = self.denoiser_module.to(dtype=torch.bfloat16)
+        #self.denoiser_module.set_dtype(dtype=self.dtype)
+        self.denoiser_module.set_dtype(dtype=torch.bfloat16)
+
+        T = T or self.T 
+        if get_intermediate_steps:
+            steps = []
+
+        res = self.config.model.backbone.resolution 
+        out_channels = self.config.model.backbone.out_channels
+
+        X_noise = torch.randn(batch_size, out_channels, res, res, res, device=self.device, dtype=self.dtype)
+        #X_noise_bf16 = X_noise.to(torch.bfloat16)
+        beta_sqrt = torch.sqrt(self.betas)
+
+        for t in range(T-1, -1, -1):
+            X_noise = X_noise.to(torch.bfloat16)
+            if get_intermediate_steps:
+                steps.append(X_noise)
+            t_tens = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
+            
+            #eps, v = self.denoiser_module(X_noise, t_tens)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16): 
+                eps, v = self.denoiser_module(X_noise, t_tens)
+
+            if torch.any(torch.isnan(eps)):
+                print(f"At time {t} we have hit nan. Why?")
+                breakpoint()
+                
+            sigma = beta_sqrt[t_tens].reshape(-1,1,1,1,1)
+            z = torch.randn_like(X_noise)
+            if t == 0:
+                z.fill_(0)
+            
+            alpha_t = self.alphas[t_tens].reshape(-1,1,1,1,1)
+            alpha_hat_t = self.alphas_hat[t_tens].reshape(-1,1,1,1,1)
+            X_noise = 1 / (torch.sqrt(alpha_t)) * \
+                      (X_noise - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * eps) + sigma * z  # denoise step 
+            if torch.any(torch.isnan(X_noise)):
+                print(f"At time {t} X_noise we have hit nan. Why?")
+                breakpoint()
+        
+        if get_intermediate_steps:
+            steps.append(X_noise)
+            return steps 
+
+        return X_noise 
 
 
 

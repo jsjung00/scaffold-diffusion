@@ -759,6 +759,8 @@ class Diffusion(L.LightningModule):
     def _loss(self, x0, attention_mask):
         '''
         x0: (torch.tensor) Voxel map of shape (B,X,Y,Z)
+
+        #TODO: need to refactor this so it can also handle original all tokens not just air/not air 
         '''
         loss = self._forward_pass_diffusion(x0)
 
