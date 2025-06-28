@@ -12,6 +12,9 @@ import os
 import dataloader 
 from voxelcnn.datasets import MinecraftTokenizer
 
+HOME_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 class RealOccupancyGenerator:
     def __init__(self, config, stored_maps_file=None):
         self.config = config 
@@ -23,9 +26,9 @@ class RealOccupancyGenerator:
         self.valid_ds = valid_ds 
 
         if stored_maps_file is None:
-            self.create_maps_file('real_occupancy_maps.pth')
+            self.create_maps_file(os.path.join(HOME_DIR, 'real_occupancy_maps.pth'))
         
-        self.maps = torch.load('real_occupancy_maps.pth')  
+        self.maps = torch.load(os.path.join(HOME_DIR, 'real_occupancy_maps.pth'))  
          
 
     def create_maps_file(self, file_path):

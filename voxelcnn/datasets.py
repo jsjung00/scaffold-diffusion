@@ -48,6 +48,7 @@ class MinecraftTokenizer:
             token_ids = torch.tensor([0, 1], dtype=torch.long) 
 
         if self.config.mask_token_id is not None:
+            raise ValueError("must not supply mask token id")
             self.vocab_size = len(self.block_id_token_map)
             self.mask_token_id = self.config.mask_token_id #make air the mask token 
         else: #make the mask token id just the largest id

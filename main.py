@@ -15,6 +15,7 @@ from sparse_vae.vae_lightning import SparseStructureVAE
 from sparse_vae.diffusion_lightning import GaussianDDPM
 from callbacks.ema import EMA
 import diffusion
+from scaffold import ScaffoldDiffusion
 import utils
 import json 
 from datetime import datetime
@@ -24,8 +25,6 @@ os.environ['DISPLAY'] = ''  # Disable display
 os.environ['MPLBACKEND'] = 'Agg'  # Force matplotlib backend
 os.environ['WANDB_SILENT'] = 'true'
 os.environ['WANDB_CONSOLE'] = 'off'
-
-
 
 
 
@@ -40,6 +39,13 @@ omegaconf.OmegaConf.register_new_resolver(
 
 
 def _load_from_checkpoint(config, tokenizer):
+    print("USING SCAFFOLD CHECKPOINT. TODO: read model class from config")
+    return ScaffoldDiffusion.load_from_checkpoint(
+        config.eval.checkpoint_path,
+        tokenizer=tokenizer,
+        config=config
+    )
+    
     return diffusion.Diffusion.load_from_checkpoint(
         config.eval.checkpoint_path,
         tokenizer=tokenizer,
@@ -103,7 +109,7 @@ def generate_samples(config, logger, tokenizer, save_traj=False):
     
     for batch_idx in range(config.sampling.num_sample_batches):
         samples, inter_values = model.restore_model_and_sample(
-            num_steps=config.sampling.steps)
+            num_steps=config.sampling.steps)    
         if save_traj:
             raise ValueError("not implemented") 
         else:        
@@ -123,11 +129,9 @@ def _train(config, logger, tokenizer):
         wandb_logger = L.pytorch.loggers.WandbLogger(
             config=omegaconf.OmegaConf.to_object(config),
             ** config.wandb)
-
+  
     if (config.checkpointing.resume_from_ckpt
-        and config.checkpointing.resume_ckpt_path is not None
-        and utils.fsspec_exists(
-            config.checkpointing.resume_ckpt_path)):
+        and config.checkpointing.resume_ckpt_path is not None):
         ckpt_path = config.checkpointing.resume_ckpt_path
     else:
         ckpt_path = None
@@ -152,7 +156,8 @@ def _train(config, logger, tokenizer):
     #model = diffusion.Diffusion(
     #    config, tokenizer)
     #model = SparseStructureVAE(config) 
-    model = GaussianDDPM(config)
+    #model = GaussianDDPM(config)
+    model = ScaffoldDiffusion(config, tokenizer)
 
     trainer = hydra.utils.instantiate(
         config.trainer,
