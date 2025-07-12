@@ -51,9 +51,12 @@ class MinecraftTokenizer:
             raise ValueError("must not supply mask token id")
             self.vocab_size = len(self.block_id_token_map)
             self.mask_token_id = self.config.mask_token_id #make air the mask token 
-        else: #make the mask token id just the largest id
-            self.mask_token_id = len(block_ids)
-            self.vocab_size = len(block_ids) + 1
+        #set the mask token id and the pad token id to be the two largest
+        self.pad_token_id = len(block_ids)
+        self.mask_token_id = len(block_ids) + 1
+        
+        self.vocab_size = len(block_ids) + 2
+        
 
         if self.air_not_air:
             self.id2token = torch.full((self.vocab_size,), fill_value=-1, dtype=torch.long)
@@ -69,10 +72,12 @@ class MinecraftTokenizer:
         id2token[block_ids] = token_ids
         self.id2token = id2token 
 
-        # create a map from token_id to block_id 
-        max_token_id = max(token_ids)
+        # create a map from token_id to block_id. mask_id and pad_id maps to itself 
+        max_token_id = self.vocab_size - 1 # asssumes tokens are 0 index and contiguous 
         token2blockid = torch.full((max_token_id+1,), fill_value=-1, dtype=torch.long)
-        token2blockid[token_ids] = block_ids 
+        token2blockid[token_ids] = block_ids # first set all the tokens that label the minecraft voxels
+        token2blockid[self.pad_token_id] = self.pad_token_id
+        token2blockid[self.mask_token_id] = self.mask_token_id 
 
         self.token2blockid = token2blockid
         
@@ -110,7 +115,8 @@ class Craft3DDataset(Dataset):
         max_samples: Optional[int] = None,
         logger: Optional[logging.Logger] = None,
         air_not_air: bool = False,
-        middle_crop: bool = False   
+        middle_crop: bool = False,
+        max_active_tokens: Optional[int] = None   
     ):
         """ Download and construct 3D-Craft dataset
 
@@ -128,6 +134,7 @@ class Craft3DDataset(Dataset):
             to stdout
             air_not_air (boolean): If true, then house structure has two token IDs, one air and one non-air. 
             middle_crop: (Bool) If true, crop the middle voxel_side_len**3 of the house structure and fill rest with zeros
+        max_active_tokens (int, optional): Remove structure if number of non-air blocks exceeds this number
         """
         super().__init__()
         self.data_dir = data_dir
@@ -143,6 +150,7 @@ class Craft3DDataset(Dataset):
         self.logger = logger
         self.air_not_air = air_not_air
         self.middle_crop = middle_crop 
+        self.max_active_tokens = max_active_tokens
 
         if self.subset not in ("train", "val", "test"):
             raise ValueError(f"Unknown subset: {self.subset}")
@@ -264,7 +272,13 @@ class Craft3DDataset(Dataset):
                 continue
             annotation = self._load_annotation(annotation)
             voxel_map = self._get_house_voxels(annotation)
-            if len(annotation) >= 100 and voxel_map is not None:
+
+            valid_house = len(annotation) >= 100 and voxel_map is not None 
+            if valid_house and self.max_active_tokens is not None:
+                num_active_tokens = torch.numel(voxel_map[voxel_map != 0])  
+                valid_house &= (num_active_tokens <= self.max_active_tokens)    
+
+            if valid_house:
                 self._all_houses.append(voxel_map)
                 max_len = max(max_len, len(annotation))
 

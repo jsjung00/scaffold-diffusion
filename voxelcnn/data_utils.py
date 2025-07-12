@@ -12,10 +12,23 @@ sys.path.append(str(Path(__file__).parent))
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+def generate_block_colors(num_blocks=255, seed=42):
+    '''
+    Generate random colors for each block 
+    '''
+    np.random.seed(seed)
 
-def voxel_to_plot(voxel_tens, file_name, base_dir=None):
+    colors = np.random.rand(num_blocks, 4)
+    colors[:, 3] = 1.0
+    colors[0] = [0,0,0,0] #air is transparent
+
+    return colors 
+
+def voxel_to_plot(voxel_tens, file_name, base_dir=None, color=True):
     '''
     voxel_tens: (torch.Tensor) Voxels containing block_ids, shape (X,Y,Z)
+
+    color: (bool) Display blocks in color instead of just boolean air not air
     '''
      
     if base_dir is None:
@@ -28,12 +41,17 @@ def voxel_to_plot(voxel_tens, file_name, base_dir=None):
     out_path = base_dir / f"{file_name}_matplot.png"
 
     voxels = voxel_tens.detach().cpu().numpy()
-    occupancy = voxels.astype(bool)
-    occupancy = np.transpose(voxels, (0, 2, 1)).astype(bool)
-
+    voxels = np.transpose(voxels, (0,2,1)).astype(np.int64)
+    if not color:
+        voxels = voxels.astype(bool)
+    
+    #occupancy = voxels.astype(bool)
+    #occupancy = np.transpose(voxels, (0, 2, 1)).astype(bool)
+    colormap = generate_block_colors()
+    facecolors = colormap[voxels] #(X,Y,Z,4) of color values
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.voxels(occupancy)
+    ax.voxels(voxels, facecolors=facecolors)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')

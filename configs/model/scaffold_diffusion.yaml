@@ -1,0 +1,13 @@
+model_name: latent_diffusion
+
+backbone_with_air_tokens: True # model sees air tokens for all x_t input 
+
+# from small.yaml 
+hidden_size: 768
+cond_dim: 128
+length: 1024
+n_blocks: 12
+n_heads: 12
+scale_by_sigma: True
+dropout: 0.1
+tie_word_embeddings: False

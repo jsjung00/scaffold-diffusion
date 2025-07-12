@@ -176,7 +176,8 @@ def main(config):
     _print_config(config, resolve=True, save_cfg=True)
 
     logger = utils.get_logger(__name__)
-    tokenizer = MinecraftTokenizer(config, config.data.air_not_air) # can later play around with changing mask token 
+    tokenizer = dataloader.get_tokenizer(config)
+    #tokenizer = MinecraftTokenizer(config, config.data.air_not_air) # can later play around with changing mask token 
 
     if config.mode == 'sample_eval':
         generate_samples(config, logger, tokenizer)

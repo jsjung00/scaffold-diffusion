@@ -3,4 +3,9 @@ max_samples: null
 train: minecraft
 valid: minecraft
 voxel_side_len: 32
-air_not_air: True
+air_not_air: False
+
+max_seq_len: 1024
+max_active_tokens: 1024
+
+tokenizer_name_or_path: minecraft

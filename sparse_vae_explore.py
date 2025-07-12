@@ -29,13 +29,13 @@ def test_latents(config):
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
 
-    vae = SparseStructureVAE.load_from_checkpoint(FULL_VAE_PATH)
+    vae = SparseStructureVAE.load_from_checkpoint(VAE_PATH)
     vae.eval()
     #vae.to(torch.bfloat16) # force inference at 16
     vae.setup()
 
 
-    diffusion = GaussianDDPM.load_from_checkpoint(FULL_DIFFUSION_PATH)
+    diffusion = GaussianDDPM.load_from_checkpoint(DIFFUSION_PATH)
     #diffusion.to(torch.bfloat16)
     diffusion.eval()
 
@@ -77,21 +77,19 @@ def test_latents(config):
 def test_diffusion(config):
     FULL_VAE_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/165728/checkpoints/sparse_vae_best.ckpt'
     FULL_DIFFUSION_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.23/115747/checkpoints/latent_diffusion_best.ckpt'   
-    #FULL_VAE_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/165728/checkpoints/sparse_vae_best.ckpt'
     VAE_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt'
-    #VAE_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt' 
-    #DIFFUSION_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/183428/checkpoints/latent_diffusion_best.ckpt'
-    #FULL_DIFFUSION_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.23/115747/checkpoints/latent_diffusion_best.ckpt'
+    DIFFUSION_PATH = '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/183428/checkpoints/latent_diffusion_best.ckpt'
+
     tokenizer = MinecraftTokenizer(config, config.data.air_not_air) # can later play around with changing mask token
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
 
-    vae = SparseStructureVAE.load_from_checkpoint(FULL_VAE_PATH)
+    vae = SparseStructureVAE.load_from_checkpoint(VAE_PATH)
     #vae.to(torch.bfloat16)
     vae.eval()
     vae.setup()
 
-    diffusion = GaussianDDPM.load_from_checkpoint(FULL_DIFFUSION_PATH)
+    diffusion = GaussianDDPM.load_from_checkpoint(DIFFUSION_PATH)
     #diffusion.to(torch.bfloat16)
     diffusion.eval()
     #diffusion.vae_model.setup()
@@ -162,5 +160,5 @@ def main(config):
 if __name__ == "__main__":
     ## experiment with equally weighted
     #main()
-    #test_diffusion()
-    test_latents()
+    test_diffusion()
+    #test_latents()
