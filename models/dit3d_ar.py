@@ -219,7 +219,7 @@ class EmbeddingLayer(nn.Module):
 ####
 
 
-class _DDiTBlock(nn.Module):
+class UncondDDiTBlock(nn.Module):
     def __init__(self, dim, n_heads, mlp_ratio=4, dropout=0.1):
         super().__init__()
         self.n_heads = n_heads
@@ -365,7 +365,7 @@ class DDiTBlock(nn.Module):
         )
         return x
 
-class _DDitFinalLayer(nn.Module):
+class UncondDDitFinalLayer(nn.Module):
     def __init__(self, hidden_size, out_channels):
         super().__init__()
         self.norm_final = LayerNorm(hidden_size)
@@ -411,6 +411,8 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
         self.learned_pos_embeddings = config.model.learned_pos_embeddings
 
+        self.global_structure_cond = config.model.global_structure_cond
+
         self.seq_len = config.data.max_seq_len
         self.voxel_side_len = config.data.voxel_side_len
 
@@ -431,21 +433,36 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
         blocks = []
         for _ in range(config.model.n_blocks):
-            blocks.append(
-                DDiTBlock(
-                    config.model.hidden_size,
-                    config.model.n_heads,
-                    cond_dim=config.model.hidden_size,
-                    dropout=config.model.dropout,
+            if self.global_structure_cond:
+                blocks.append(
+                    DDiTBlock(
+                        config.model.hidden_size,
+                        config.model.n_heads,
+                        cond_dim=config.model.hidden_size,
+                        dropout=config.model.dropout,
+                    )
                 )
-            )
+            else:
+                blocks.append(
+                    UncondDDiTBlock(
+                        config.model.hidden_size,
+                        config.model.n_heads,
+                        dropout=config.model.dropout,
+                    )
+                )
+
 
         self.blocks = nn.ModuleList(blocks)
 
-        self.output_layer = DDitFinalLayer(
-            config.model.hidden_size, vocab_size,
-            cond_dim=config.model.hidden_size
-        )
+        if self.global_structure_cond:
+            self.output_layer = DDitFinalLayer(
+                config.model.hidden_size, vocab_size,
+                cond_dim=config.model.hidden_size
+            )
+        else:
+            self.output_layer = UncondDDitFinalLayer(
+                config.model.hidden_size, vocab_size
+            )
         self.scale_by_sigma = config.model.scale_by_sigma
 
 
@@ -485,12 +502,19 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         x = x + pos_embed
 
         batch_size, seq_len = indices.shape[0], indices.shape[1]
-        # condition on the global structure which is sum of pos embedding of non-pad and non-BOS tokens             
+        # condition on the global structure which is sum of pos embedding of non-pad and non-BOS tokens. The first token is BOS token             
         batch_global_structures = torch.stack([torch.sum(pos_embed[i][attention_mask[i]][1:], dim=0) for i in range(batch_size)])
-       
+    
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             for i in range(len(self.blocks)):
-                x = self.blocks[i](x, attention_mask, batch_global_structures, seqlens=None)
-            x = self.output_layer(x, batch_global_structures)
+                if self.global_structure_cond:
+                    x = self.blocks[i](x, batch_global_structures, attention_mask, seqlens=None)
+                else:
+                    x = self.blocks[i](x, attention_mask, seqlens=None)
+            
+            if self.global_structure_cond:
+                x = self.output_layer(x, batch_global_structures)
+            else:
+                x = self.output_layer(x)
 
         return x

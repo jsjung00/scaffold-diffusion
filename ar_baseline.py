@@ -419,9 +419,9 @@ class ARBaseline(L.LightningModule):
             return  
 
         for _ in range(self.config.sampling.num_sample_batches):
-            samples, _, token_pos, pad_mask = self._sample()
+            samples, token_pos, pad_mask = self._sample()
             samples = samples.detach().cpu()
-            block_samples = self.tokenizer.detokenize(samples) #(B, L) containing pad tokens
+            block_samples = self.tokenizer.detokenize(samples) #(B, L) containing pad tokens.
             block_voxels = self._reshape_seq_voxels(block_samples, token_pos, pad_mask) #(B,X,Y,Z)
         
             for i in range(self.config.sampling.num_sample_log):
@@ -556,13 +556,13 @@ class ARBaseline(L.LightningModule):
 
     @torch.no_grad()
     def _sample(self, num_steps=None, eps=1e-5):
-        """Generate samples from the model."""
-        inter_values = []
+        """Generate samples from the model.
+            Note: we may lose one token if the original sequence has L many active tokens (i.e no padding space)
+                to accomodate the <BOS> token
+        """
 
         batch_size_per_gpu = self.config.loader.eval_batch_size
         # Lightning auto-casting is not working in this method for some reason
-        if num_steps is None:
-            num_steps = self.config.sampling.steps
 
         # "generate" some air token positions
         with torch.no_grad():
@@ -573,46 +573,26 @@ class ARBaseline(L.LightningModule):
         token_pos, token_ids = token_pos.to(self.device), token_ids.to(self.device)
         pad_mask = (token_ids != self.pad_token).to(self.device)
 
-        fully_masked = self._sample_prior(batch_size_per_gpu, self.config.model.length).to(self.device)
+        max_batch_active_tokens = max([torch.sum(pad_mask[i]).item() -1 for i in range(pad_mask.shape[0])])
 
-        x = torch.where(pad_mask, fully_masked, token_ids) #[MASK] and [PAD] tokens 
+        # generating sequences that start with <BOS> token 
+        x = token_ids.clone() 
+        for i in range(max_batch_active_tokens):
+            logits = self.forward(x, token_pos, pad_mask) # (B,L,V)
+            next_token_logits = logits[:, i]    
+            probs = F.softmax(next_token_logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1, replacement=True)
 
-        # generate fully masked (B, D, D, D)
-        #x = self._sample_prior(batch_size_per_gpu, self.config.data.voxel_side_len, self.config.data.voxel_side_len, self.config.data.voxel_side_len).to(
-        #    self.device
-        #)
+            x[:, i+1] = idx_next
 
-        timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
-        dt = (1 - eps) / num_steps
-        p_x0_cache = None
-
-        for i in range(num_steps):
-            t = timesteps[i] * torch.ones(x.shape[0], 1, device=self.device)
-            if self.sampler == "ddpm":
-                raise ValueError("Need to fix like cache")
-                x = self._ddpm_update(x, t, dt, occupancy_map=occupancy_map)
-            elif self.sampler == "ddpm_cache":
-                p_x0_cache, x_next = self._ddpm_caching_update(
-                    x, t, dt, p_x0=p_x0_cache, token_pos=token_pos, pad_mask=pad_mask
-                )
-                if not torch.allclose(x_next, x) or self.time_conditioning:
-                    # Disable caching
-                    p_x0_cache = None
-                x = x_next
-            else:
-                x = self._analytic_update(x, t, dt)
-            inter_values.append(x)
-
-        if self.config.sampling.noise_removal:
-            t = timesteps[-1] * torch.ones(x.shape[0], 1, device=self.device)
-            if self.sampler == "analytic":
-                x = self._denoiser_update(x, t)
-            else:
-                unet_conditioning = self.noise(t)[0]
-                x = self.forward(x, token_pos, unet_conditioning, pad_mask).argmax(dim=-1)
-
-        inter_values.append(x)
-        return x, inter_values, token_pos, pad_mask 
+        # re-pad the tokens that should be pad 
+        x[~pad_mask] = self.pad_token
+        
+        # remove the first <BOS> token
+        return_x = x[:, 1:]
+        return_token_pos = token_pos[:, 1:]
+        return_pad_mask = pad_mask[:, 1:]
+        return return_x, return_token_pos, return_pad_mask
 
     def restore_model_and_sample(self, num_steps, eps=1e-5):
         """Generate samples from the model."""
@@ -626,14 +606,14 @@ class ARBaseline(L.LightningModule):
             )
         self.backbone.eval()
         self.noise.eval()
-        samples, inter_values, token_pos, pad_mask = self._sample(num_steps=num_steps, eps=eps)
+        samples, token_pos, pad_mask = self._sample(num_steps=num_steps, eps=eps)
         if self.ema:
             self.ema.restore(
                 itertools.chain(self.backbone.parameters(), self.noise.parameters())
             )
         self.backbone.train()
         self.noise.train()
-        return samples, inter_values, token_pos, pad_mask 
+        return samples, token_pos, pad_mask 
 
     def get_score(self, x, sigma):
         model_output = self.forward(x, sigma)
