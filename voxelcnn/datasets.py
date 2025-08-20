@@ -21,7 +21,7 @@ import numpy as np
 import requests
 import torch
 from torch.utils.data import Dataset
-from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot
+from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot, voxel_to_json, voxel_to_schematic
 
 #torch.manual_seed(42)
 
@@ -54,8 +54,9 @@ class MinecraftTokenizer:
         #set the mask token id and the pad token id to be the two largest
         self.pad_token_id = len(block_ids)
         self.mask_token_id = len(block_ids) + 1
+        self.bos_token_id = len(block_ids) + 2
         
-        self.vocab_size = len(block_ids) + 2
+        self.vocab_size = len(block_ids) + 3
         
 
         if self.air_not_air:
@@ -73,11 +74,11 @@ class MinecraftTokenizer:
         self.id2token = id2token 
 
         # create a map from token_id to block_id. mask_id and pad_id maps to itself 
-        max_token_id = self.vocab_size - 1 # asssumes tokens are 0 index and contiguous 
-        token2blockid = torch.full((max_token_id+1,), fill_value=-1, dtype=torch.long)
+        token2blockid = torch.full((self.vocab_size,), fill_value=-1, dtype=torch.long)
         token2blockid[token_ids] = block_ids # first set all the tokens that label the minecraft voxels
         token2blockid[self.pad_token_id] = self.pad_token_id
         token2blockid[self.mask_token_id] = self.mask_token_id 
+        token2blockid[self.bos_token_id] = self.bos_token_id
 
         self.token2blockid = token2blockid
         
@@ -116,7 +117,10 @@ class Craft3DDataset(Dataset):
         logger: Optional[logging.Logger] = None,
         air_not_air: bool = False,
         middle_crop: bool = False,
-        max_active_tokens: Optional[int] = None   
+        max_active_tokens: Optional[int] = None,
+        translate: bool = True, 
+        rotate: bool = True,
+        max_translation: int = 4   
     ):
         """ Download and construct 3D-Craft dataset
 
@@ -152,6 +156,10 @@ class Craft3DDataset(Dataset):
         self.middle_crop = middle_crop 
         self.max_active_tokens = max_active_tokens
 
+        self.translate = translate
+        self.rotate = rotate 
+        self.max_translation = max_translation if self.translate else 0  
+
         if self.subset not in ("train", "val", "test"):
             raise ValueError(f"Unknown subset: {self.subset}")
 
@@ -181,6 +189,12 @@ class Craft3DDataset(Dataset):
             voxel_tokens = self.tokenizer.tokenize(voxel_map)
         else:
             voxel_tokens = voxel_map
+
+        if self.rotate:
+            voxel_tokens = self.apply_rotation(voxel_tokens)
+        if self.translate:
+            voxel_tokens = self.apply_translation(voxel_tokens)
+
         return voxel_tokens 
 
     def get_percentage_nonair(self) -> int:
@@ -227,18 +241,69 @@ class Craft3DDataset(Dataset):
             tar = tarfile.open(tar_path, "r")
             tar.extractall(self.data_dir)
 
+    def apply_rotation(self, voxel_cube):
+        '''
+        Randomly rotate 
+
+        voxel_cube: (torch.Tensor) Shape (X,Y,Z) contains air padding
+        '''
+        # uniform sample from [0, 90, 180, 270]
+        num_90_rotations = torch.randint(low=0, high=4, size=(1,)).item()
+
+        if num_90_rotations == 0:
+            return voxel_cube
+        
+        return torch.rot90(voxel_cube, k=num_90_rotations, dims=(0,1))
+
+    def apply_translation(self, voxel_cube):
+        '''
+        Randomly translate 
+
+        voxel_cube: (torch.Tensor) Shape (X,Y,Z) contains air padding
+        '''
+        # uniformly sample axes (x,y, z) to translate + translation amount
+        translation_amount = torch.randint(low=0, high=self.max_translation+1, size=()).item()
+        translate_direction = torch.randint(low=0, high=2, size=()).item()*2 - 1
+        translate_dim = torch.randint(low=0, high=3, size=()).item() 
+
+        if translation_amount == 0:
+            return voxel_cube.clone()
+
+        new_voxel_cube = torch.zeros_like(voxel_cube)
+        if translate_dim == 0:
+            if translate_direction == 1:
+                new_voxel_cube[translation_amount:, :, :] = voxel_cube[0:-translation_amount, :, :]
+            else:
+                new_voxel_cube[0:-translation_amount, :, :] = voxel_cube[translation_amount:, :, :]
+        elif translate_dim == 1:
+            if translate_direction == 1:
+                new_voxel_cube[:, translation_amount:, :] = voxel_cube[:, 0:-translation_amount, :]
+            else:
+                new_voxel_cube[:, 0:-translation_amount, :] = voxel_cube[:, translation_amount:, :] 
+        else:
+            if translate_direction == 1:
+                new_voxel_cube[:, :, translation_amount:] = voxel_cube[:,:, 0:-translation_amount]
+            else:
+                new_voxel_cube[:,:, 0:-translation_amount] = voxel_cube[:,:, translation_amount:]
+            
+
+        return new_voxel_cube
+    
     def _get_house_voxels(self, annotation: torch.Tensor):
         '''
         Given my annotation or house structure that is shape (N,4) where each block represented
-            by [block_id, x,y,z], returns None if houese doesn't within voxel_size**3, else return
-            voxel map of size (voxel_side_len,voxel_side_len,voxel_side_len)
+            by [block_id, x,y,z],
+            
+            
+        If house doesn't within (voxel_size-max_translation)**3 return None
+            Else return voxel map of size (voxel_side_len,voxel_side_len,voxel_side_len)
         '''
         coords = annotation[:, 1:].long()
         block_ids  = annotation[:, 0].long() 
         mins, _ = coords.min(dim=0)
         maxs, _ = coords.max(dim=0)
         spans = maxs - mins + 1 
-        if spans.max() > self.voxel_side_len:
+        if spans.max() > self.voxel_side_len - (self.max_translation*2):
             return None
 
         slack = self.voxel_side_len - spans 
@@ -264,8 +329,11 @@ class Craft3DDataset(Dataset):
             splits = json.load(f)
 
         self._all_houses = []
+        total_files = 0
         max_len = 0
         for filename in splits[self.subset]:
+            total_files += 1
+
             annotation = osp.join(self.data_dir, "houses", filename, "placed.json")
             if not osp.isfile(annotation):
                 warnings.warn(f"No annotation file for: {annotation}")
@@ -281,6 +349,8 @@ class Craft3DDataset(Dataset):
             if valid_house:
                 self._all_houses.append(voxel_map)
                 max_len = max(max_len, len(annotation))
+        
+        print(f"Original num houses: {total_files}; filtered num houses {len(self._all_houses)}")
 
     def _load_annotation(self, annotation_path: str) -> torch.Tensor:
         with open(annotation_path, "r") as f:
@@ -307,20 +377,29 @@ class Craft3DDataset(Dataset):
 if __name__ == "__main__":
     work_dir = osp.join(osp.dirname(osp.abspath(__file__)), "..")
     config = Box({'mask_token_id': None})
-    tokenizer = MinecraftTokenizer(config, air_not_air=True)
-    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=16,\
-                             tokenizer=tokenizer, air_not_air=True, max_samples=1)
-    valdataset = Craft3DDataset(osp.join(work_dir, "data"), "val", voxel_side_len=16,\
+    tokenizer = MinecraftTokenizer(config, air_not_air=False)
+    dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=64,\
+                             tokenizer=tokenizer, air_not_air=False, max_samples=1, max_translation=0,\
+                                rotate=False, translate=False, max_active_tokens=1024)
+    
+    valdataset = Craft3DDataset(osp.join(work_dir, "data"), "val", voxel_side_len=32,\
                              tokenizer=tokenizer, air_not_air=True, max_samples=1)
 
-    #no_token_dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=32,\
-    #                         tokenizer=None)
+    no_token_dataset = Craft3DDataset(osp.join(work_dir, "data"), "train", voxel_side_len=64,\
+                             tokenizer=None, max_active_tokens=1024, rotate=True, translate=True, max_translation=4)
+
+
+
     breakpoint()
     for i in range(5):
         house = dataset[i]
-        house_blocks = tokenizer.detokenize(house)
-        
-        voxel_to_plot(house_blocks, f"sample{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
+        #house = no_token_dataset[i]
+        voxel_to_json(house, f"house_example_{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
+        #voxel_to_schematic(house, f'example_{i}')
+        #voxel_to_nbt(house, f"example_{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
+        #house_blocks = tokenizer.detokenize(house)
+        break 
+        #voxel_to_plot(house_blocks, f"sample{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
         # Note: need to de-tokenize and get block_ids before saving to nbt 
-        voxel_to_nbt(house_blocks, f"air_not_air_{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files', gzip=True)
+        #voxel_to_nbt(house_blocks, f"air_not_air_{i}", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files', gzip=True)
         

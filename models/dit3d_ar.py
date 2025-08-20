@@ -219,7 +219,7 @@ class EmbeddingLayer(nn.Module):
 ####
 
 
-class DDiTBlock(nn.Module):
+class _DDiTBlock(nn.Module):
     def __init__(self, dim, n_heads, mlp_ratio=4, dropout=0.1):
         super().__init__()
         self.n_heads = n_heads
@@ -266,7 +266,7 @@ class DDiTBlock(nn.Module):
 
         attention_mask = torch.einsum('bi,bj->bij', pad_mask, pad_mask).bool() #(b,s,s)
         causal_mask = torch.tril(torch.ones(seq_len, seq_len), diagonal=0)
-        causal_mask = torch.broadcast_to(causal_mask, attention_mask.shape).bool()
+        causal_mask = torch.broadcast_to(causal_mask, attention_mask.shape).bool().to(attention_mask.device)
         attention_mask = attention_mask & causal_mask
 
         attention_mask = attention_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
@@ -292,9 +292,80 @@ class DDiTBlock(nn.Module):
             self.dropout,
         )
         return x
+    
+class DDiTBlock(nn.Module):
+    def __init__(self, dim, n_heads, cond_dim, mlp_ratio=4, dropout=0.1):
+        super().__init__()
+        self.n_heads = n_heads
 
+        self.norm1 = LayerNorm(dim)
+        self.attn_qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.attn_out = nn.Linear(dim, dim, bias=False)
+        self.dropout1 = nn.Dropout(dropout)
 
-class DDitFinalLayer(nn.Module):
+        self.norm2 = LayerNorm(dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_ratio * dim, bias=True),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(mlp_ratio * dim, dim, bias=True),
+        )
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout = dropout
+
+        self.adaLN_modulation = nn.Linear(cond_dim, 6 * dim, bias=True)
+        self.adaLN_modulation.weight.data.zero_()
+        self.adaLN_modulation.bias.data.zero_()
+
+    def _get_bias_dropout_scale(self):
+        if self.training:
+            return bias_dropout_add_scale_fused_train
+        else:
+            return bias_dropout_add_scale_fused_inference
+
+    def forward(self, x, c, pad_mask, seqlens=None):
+        '''
+        pad_mask: (B,L) boolean mask. 1 if not pad   
+        '''
+        batch_size, seq_len = x.shape[0], x.shape[1]
+
+        bias_dropout_scale_fn = self._get_bias_dropout_scale()
+
+        (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (
+            self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
+        )
+
+        # attention operation
+        x_skip = x
+        x = modulate_fused(self.norm1(x), shift_msa, scale_msa)
+
+        qkv = self.attn_qkv(x)
+        qkv = rearrange(
+            qkv, "b s (three h d) -> b three h s d", three=3, h=self.n_heads
+        )
+        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2] # (b h s d)
+
+        attention_mask = torch.einsum('bi,bj->bij', pad_mask, pad_mask).bool() #(b,s,s)
+        attention_mask = attention_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
+        x = torch.nn.functional.scaled_dot_product_attention(q,k,v, attn_mask=attention_mask, dropout_p=0.0)
+
+        x = rearrange(x, "b h s d -> b s (h d)", b = batch_size, h=self.n_heads)
+        #x = rearrange(x, "(b s) h d -> b s (h d)", b=batch_size)
+
+        x = bias_dropout_scale_fn(
+            self.attn_out(x), None, gate_msa, x_skip, self.dropout
+        )
+
+        # mlp operation
+        x = bias_dropout_scale_fn(
+            self.mlp(modulate_fused(self.norm2(x), shift_mlp, scale_mlp)),
+            None,
+            gate_mlp,
+            x,
+            self.dropout,
+        )
+        return x
+
+class _DDitFinalLayer(nn.Module):
     def __init__(self, hidden_size, out_channels):
         super().__init__()
         self.norm_final = LayerNorm(hidden_size)
@@ -306,6 +377,25 @@ class DDitFinalLayer(nn.Module):
         x = self.norm_final(x)
         x = self.linear(x)
         return x
+    
+class DDitFinalLayer(nn.Module):
+    def __init__(self, hidden_size, out_channels, cond_dim):
+        super().__init__()
+        self.norm_final = LayerNorm(hidden_size)
+        self.linear = nn.Linear(hidden_size, out_channels)
+        self.linear.weight.data.zero_()
+        self.linear.bias.data.zero_()
+
+        self.adaLN_modulation = nn.Linear(cond_dim, 2 * hidden_size, bias=True)
+        self.adaLN_modulation.weight.data.zero_()
+        self.adaLN_modulation.bias.data.zero_()
+
+    def forward(self, x, c):
+        shift, scale = self.adaLN_modulation(c)[:, None].chunk(2, dim=2)
+        x = modulate_fused(self.norm_final(x), shift, scale)
+        x = self.linear(x)
+        return x
+
 
 
 class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
@@ -345,6 +435,7 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
                 DDiTBlock(
                     config.model.hidden_size,
                     config.model.n_heads,
+                    cond_dim=config.model.hidden_size,
                     dropout=config.model.dropout,
                 )
             )
@@ -352,7 +443,8 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         self.blocks = nn.ModuleList(blocks)
 
         self.output_layer = DDitFinalLayer(
-            config.model.hidden_size, vocab_size
+            config.model.hidden_size, vocab_size,
+            cond_dim=config.model.hidden_size
         )
         self.scale_by_sigma = config.model.scale_by_sigma
 
@@ -392,11 +484,13 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
         x = x + pos_embed
 
-        seq_len = indices.shape[1]
+        batch_size, seq_len = indices.shape[0], indices.shape[1]
+        # condition on the global structure which is sum of pos embedding of non-pad and non-BOS tokens             
+        batch_global_structures = torch.stack([torch.sum(pos_embed[i][attention_mask[i]][1:], dim=0) for i in range(batch_size)])
        
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             for i in range(len(self.blocks)):
-                x = self.blocks[i](x, attention_mask, seqlens=None)
-            x = self.output_layer(x)
+                x = self.blocks[i](x, attention_mask, batch_global_structures, seqlens=None)
+            x = self.output_layer(x, batch_global_structures)
 
         return x
