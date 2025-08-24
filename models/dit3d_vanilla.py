@@ -322,19 +322,25 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
 
         self.vocab_embed = EmbeddingLayer(config.model.hidden_size, vocab_size)
 
+        self.learned_pos_embeddings = config.model.learned_pos_embeddings
+
         self.seq_len = config.data.max_seq_len
         self.voxel_side_len = config.data.voxel_side_len
 
         self.sigma_map = TimestepEmbedder(config.model.cond_dim)
-        self.pos_embed = nn.Parameter(
-            torch.zeros(
-                self.voxel_side_len,
-                self.voxel_side_len,
-                self.voxel_side_len,
-                config.model.hidden_size,
-            ),
-            requires_grad=False,
-        )
+        if self.learned_pos_embeddings:
+            self.pos_embed = nn.Embedding(num_embeddings=self.voxel_side_len**3, embedding_dim=config.model.hidden_size)
+        else:
+            self.pos_embed = nn.Parameter(
+                torch.zeros(
+                    self.voxel_side_len,
+                    self.voxel_side_len,
+                    self.voxel_side_len,
+                    config.model.hidden_size,
+                ),
+                requires_grad=False,
+            )
+            self.initialize_weights()
 
         blocks = []
         for _ in range(config.model.n_blocks):
@@ -353,13 +359,12 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
             config.model.hidden_size, vocab_size, config.model.cond_dim
         )
         self.scale_by_sigma = config.model.scale_by_sigma
-        self.initialize_weights()
+
 
     def initialize_weights(self):
         pos_embed = get_3d_sincos_pos_embed(
             self.pos_embed.shape[-1], self.voxel_side_len
         ).squeeze()
-        
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float())
 
     def _get_bias_dropout_scale(self):
@@ -383,7 +388,12 @@ class DIT(nn.Module, huggingface_hub.PyTorchModelHubMixin):
         x_coord = token_pos[..., 0]
         y_coord = token_pos[..., 1]
         z_coord = token_pos[..., 2]
-        pos_embed = self.pos_embed[x_coord, y_coord, z_coord]  # (B, L, hidden_dim)
+
+        if self.learned_pos_embeddings:
+            flattened_coord = (self.voxel_side_len**2)*x_coord + (self.voxel_side_len)*y_coord + z_coord
+            pos_embed = self.pos_embed(flattened_coord)
+        else:
+            pos_embed = self.pos_embed[x_coord, y_coord, z_coord]  # (B, L, hidden_dim)
 
         x = x + pos_embed
 

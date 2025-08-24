@@ -268,6 +268,7 @@ class UncondDDiTBlock(nn.Module):
         causal_mask = torch.tril(torch.ones(seq_len, seq_len), diagonal=0)
         causal_mask = torch.broadcast_to(causal_mask, attention_mask.shape).bool().to(attention_mask.device)
         attention_mask = attention_mask & causal_mask
+        attention_mask = attention_mask[:, :seq_len, :seq_len]
 
         attention_mask = attention_mask.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
         x = torch.nn.functional.scaled_dot_product_attention(q,k,v, attn_mask=attention_mask, dropout_p=0.0)
@@ -513,6 +514,7 @@ class DITAR(nn.Module, huggingface_hub.PyTorchModelHubMixin):
                     x = self.blocks[i](x, attention_mask, seqlens=None)
             
             if self.global_structure_cond:
+                assert "We need to fix this, currenlty we do a speed up and only pass in trunctaed sequences during inference"
                 x = self.output_layer(x, batch_global_structures)
             else:
                 x = self.output_layer(x)

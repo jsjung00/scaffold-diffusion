@@ -111,7 +111,7 @@ class ScaffoldDiffusion(L.LightningModule):
         self.vae.eval()
         '''
 
-        self.occupancy_gen = RealOccupancyGenerator(config, os.path.join(HOME_DIR,'real_occupancy_maps.pth'))
+        self.occupancy_gen = RealOccupancyGenerator(config, os.path.join(HOME_DIR,'32_real_occupancy_maps.pth'))
 
         self.T = self.config.T
         self.subs_masking = self.config.subs_masking
@@ -293,6 +293,9 @@ class ScaffoldDiffusion(L.LightningModule):
         # log prob at the mask index = - infinity
         logits[..., self.mask_index] += self.neg_infinity
 
+        # also ensure that [PAD] tokens are never selected
+        logits[..., self.pad_token] += self.neg_infinity
+
         # Normalize the logits such that x.exp() is
         # a probability distribution over vocab_size.
         logits = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
@@ -342,6 +345,34 @@ class ScaffoldDiffusion(L.LightningModule):
         assert sigma.ndim == 1, sigma.shape
         return sigma
 
+    def forward_voxels(self, x, sigma):
+        '''
+        Like forward() but takes in a batch of voxels as input and time conditioning sigma
+
+        x: (BXYZ)
+        '''
+        sigma = self._process_sigma(sigma)
+        with torch.cuda.amp.autocast(dtype=torch.float32):
+            logits = self.backbone(x, sigma)  # (B,X,Y,Z,Vocab)
+
+        # debugging stats
+        predictions = torch.argmax(logits, dim=-1)
+        num_air_majority = (predictions == 0).sum().item()
+        num_samples = predictions.numel()
+        #print(f"Backbone Model predicts air ratio: {num_air_majority / num_samples:.3f} \n")
+
+        if self.parameterization == "subs":
+            return self._subs_parameterization(logits=logits, xt=x)
+        elif self.parameterization == "sedd":
+            raise ValueError("Did not fix shape issue")
+            return self._sedd_parameterization(logits=logits, xt=x, sigma=sigma)
+        elif self.parameterization == "d3pm":
+            raise ValueError("Did not fix shape issue")
+            return self._d3pm_parameterization(logits=logits)
+
+        raise ValueError("We need to be one of those to handle the neg inf logit for mask token, preserve unmasked tokens")
+        return logits
+
     def forward(self, x, token_pos, sigma, pad_mask):
         """Returns log score.
             x: torch.tensor (B, L) masked token ids sequence, contains pad tokens
@@ -350,7 +381,7 @@ class ScaffoldDiffusion(L.LightningModule):
         """
         sigma = self._process_sigma(sigma)
         with torch.cuda.amp.autocast(dtype=torch.float32):
-            logits = self.backbone(x, token_pos, sigma, pad_mask)  # (B,L, Vocab)
+                logits = self.backbone(x, token_pos, sigma, pad_mask)  # (B,L, Vocab)
 
         # debugging stats
         #predictions = torch.argmax(logits, dim=-1)
@@ -436,6 +467,7 @@ class ScaffoldDiffusion(L.LightningModule):
 
         self.log_dict(metrics, on_step=False, on_epoch=True) 
         self.log_dict(likelihood_metric, on_step=False, on_epoch=True)
+        self.log(f"{prefix}/loss", loss)
         return loss
 
     def on_train_epoch_start(self):
@@ -472,7 +504,7 @@ class ScaffoldDiffusion(L.LightningModule):
             samples, _, token_pos, pad_mask = self._sample()
             samples = samples.detach().cpu()
             block_samples = self.tokenizer.detokenize(samples) #(B, L) containing pad tokens
-            block_voxels = self._reshape_seq_voxels(samples, token_pos, pad_mask) #(B,X,Y,Z)
+            block_voxels = self._reshape_seq_voxels(block_samples, token_pos, pad_mask) #(B,X,Y,Z)
         
             for i in range(self.config.sampling.num_sample_log):
                 sample = block_voxels[i]
@@ -617,7 +649,7 @@ class ScaffoldDiffusion(L.LightningModule):
         # "generate" some air token positions
         with torch.no_grad():
             occupancy_map = self.occupancy_gen.get_random_batch(batch_size=batch_size_per_gpu) #(B,X,Y,Z)
-        
+   
         # generate prior sequence 
         token_pos, token_ids = self._get_token_pos_ids(occupancy_map.long(), occupancy_map) #pad_mask is 1 where active voxel 
         token_pos, token_ids = token_pos.to(self.device), token_ids.to(self.device)
@@ -841,6 +873,62 @@ class ScaffoldDiffusion(L.LightningModule):
 
         return token_pos, token_ids 
 
+    def _forward_pass_diffusion_voxels(self, batch):
+        '''
+        batch: (B,X,Y,Z) voxels with ids 
+        '''
+        B = batch.shape[0]
+
+        t = self._sample_t(B, batch.device)
+        if self.T > 0:
+            t = (t * self.T).to(torch.int)
+            t = t / self.T
+            # t \in {1/T, 2/T, ..., 1}
+            t += 1 / self.T
+
+        if self.change_of_variables:
+            unet_conditioning = t[:, None]
+            f_T = torch.log1p(-torch.exp(-self.noise.sigma_max))
+            f_0 = torch.log1p(-torch.exp(-self.noise.sigma_min))
+            move_chance = torch.exp(f_0 + t * (f_T - f_0))
+            move_chance = move_chance[:, None]
+        else:
+            sigma, dsigma = self.noise(t)
+            unet_conditioning = sigma[:, None]
+            move_chance = 1 - torch.exp(-sigma)
+
+        move_chance = move_chance.view(move_chance.shape[0], *([1] * (batch.dim() - 1)))
+
+        xt = self.q_xt(batch, move_chance)
+        model_output = self.forward_voxels(xt, unet_conditioning)  # (B, L, Vocab)
+        
+        # debugging the all air behavior
+        predictions = torch.argmax(model_output, dim=-1)
+        num_air_majority = (predictions == 0).sum().item()
+        num_samples = predictions.numel()
+        #print(f"After forward pass, modified logits air ratio: {num_air_majority / num_samples:.3f} \n")
+
+        #non_air_predictions = torch.argmax(model_output, dim=-1)[occupancy_map.bool()]
+        #num_air_majority = (non_air_predictions == 0).sum().item()
+        #num_samples = non_air_predictions.numel()
+        #print(f"After forward pass, non-air positions air majority {num_air_majority / num_samples}")
+
+
+        utils.print_nans(model_output, "model_output")
+
+        # SUBS parameterization, continuous time.
+        log_p_theta = torch.gather(
+            input=model_output, dim=-1, index=batch.unsqueeze(-1)
+        ).squeeze(-1)  # (B,L) full of logit of correct token id
+
+        if self.change_of_variables or self.importance_sampling:
+            raise ValueError("Not verified yet")
+            return log_p_theta * torch.log1p(-torch.exp(-self.noise.sigma_min))
+        
+        assert len((dsigma / torch.expm1(sigma))[:, None, None, None].shape) == len(log_p_theta.shape)   
+
+        return -log_p_theta * (dsigma / torch.expm1(sigma))[:, None, None, None], log_p_theta.exp()
+
 
     def _forward_pass_diffusion(self, token_ids, token_pos, pad_mask):
         '''
@@ -920,13 +1008,20 @@ class ScaffoldDiffusion(L.LightningModule):
         x0: (torch.tensor) Voxel map of shape (B,X,Y,Z)
         occupancy_map: boolean of shape (B,X,Y,Z)
         '''
-        # extract token_ids, token_pos 
-        token_pos, token_ids = self._get_token_pos_ids(x0, occupancy_map) #(B,L,3) and (B, L)
+        if self.config.model.backbone == "dit_3d":
+            raise ValueError("Didn't finish this. You can look at the git hub june code. You would need to change\
+                             sampling code. Does it condition on the occupancy map in generation?")
+            loss, likelihood = self._forward_pass_diffusion_voxels(x0, occupancy_map=occupancy_map)
+        elif self.config.model.backbone == "dit":
+            # extract token_ids, token_pos 
+            token_pos, token_ids = self._get_token_pos_ids(x0, occupancy_map) #(B,L,3) and (B, L)
 
-        # ignore padding tokens 
-        pad_mask = (token_ids != self.pad_token).bool()
-        
-        loss, likelihood = self._forward_pass_diffusion(token_ids, token_pos, pad_mask)
+            # ignore padding tokens 
+            pad_mask = (token_ids != self.pad_token).bool()
+            
+            loss, likelihood = self._forward_pass_diffusion(token_ids, token_pos, pad_mask)
+        else:
+            raise ValueError("have not implemented for other than dit3d and dit")
 
         if pad_mask is not None:
             nlls = loss * pad_mask

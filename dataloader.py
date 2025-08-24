@@ -60,7 +60,10 @@ def get_dataloaders(config, tokenizer):
             max_samples=config.data.max_samples,
             voxel_side_len=config.data.voxel_side_len,
             air_not_air=config.data.air_not_air,
-            max_active_tokens=config.data.max_active_tokens
+            max_active_tokens=config.data.max_active_tokens,
+            rotate=config.data.rotate and (subset=='train'),
+            translate=config.data.translate and (subset=='train'),
+            max_translation=config.data.max_translation
         )
         if config.overfit:
             dataset = RepeatDataset(dataset[0], 20000)
