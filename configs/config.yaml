@@ -1,13 +1,13 @@
 defaults:
   - _self_
-  - /callbacks: [checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
+  - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft #minecraft TODO: change
-  - /model: scaffold_diffusion #latent_diffusion / sparse_vae / scaffold_diffusion / small #TODO: change 
+  - /model: scaffold_diffusion #latent_flow / latent_diffusion / sparse_vae / scaffold_diffusion / small / ar_baseline / vqvae_baseline #TODO: change ''
   - /strategy: ddp
   - /noise: loglinear
-  - /lr_scheduler: constant_warmup
+  - /lr_scheduler: cosine_decay_warmup #constant_warmup
 
-mode: train  # train / sample_eval
+mode: train  # train / sample_eval / autoencode 
 diffusion: absorbing_state
 backbone: dit  # unet / dit_3d / dit #TODO: change
 parameterization: subs  # subs / d3pm / sedd
@@ -15,7 +15,6 @@ time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
 mask_token_id: null # 0 for air 
-air_weight: 0.5 # weighting loss on air token by this ratio  
 overfit: False  #False
 
 # naming
@@ -24,41 +23,47 @@ model_name: scaffold #latent_diffusion / sparse_vae / scaffold
 seed: 1
 
 latent:
-  vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.22/165728/checkpoints/sparse_vae_best.ckpt
+  vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/111538/checkpoints/39-50000.ckpt
   #vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt
-  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.21/182705/checkpoints/latent_diffusion_best.ckpt
+  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/091224/checkpoints/scaffold_best.ckpt
+
+multinomial_vqvae:
+  vqvae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/223833/checkpoints/vqvae_best.ckpt
+  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/234253/checkpoints/latent_multinomial_best.ckpt
 
 loader:
-  global_batch_size: 28
+  global_batch_size: 28 #  28 24
   eval_global_batch_size: 28
   # Note: batch_size and eval_batch_size are **per machine**
   batch_size: 28
   eval_batch_size: 28
-  num_workers: 16
+  num_workers: 12
   pin_memory: True
 
 sampling:
   predictor: ddpm_cache  # analytic / ddpm / ddpm_cache
-  steps: 128
+  steps: 1024
   noise_removal: True
   # TODO(yair): @subham, why aren't these params under `eval`?
-  num_sample_batches: 2  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
+  num_sample_batches: 1  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
   num_sample_log: 2
   semi_ar: False
   stride_length: 1
   num_strides: 1
-  val_sample_freq: 10
+  val_sample_freq: 1000 # 10
 
 training:
-  use_ema: True 
-  ema: 0.9999
+  ema: 0.9999 # 0.9999
+  use_ema: True # True
   antithetic_sampling: True
   importance_sampling: False
   sampling_eps: 1e-3
   change_of_variables: False
 
 eval:
-  checkpoint_path: '/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.28/075845/checkpoints/scaffold_best.ckpt'   #'/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.25/184958/checkpoints/scaffold_best.ckpt'
+  #checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.31/230745/checkpoints/83-30000.ckpt
+  #checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.13/072426/checkpoints/69-25000.ckpt #/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/111538/checkpoints/39-50000.ckpt
+  checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.19/221105/checkpoints/scaffold_best.ckpt
   disable_ema: False
   compute_generative_perplexity: False
   perplexity_batch_size: 8
@@ -68,7 +73,7 @@ eval:
 
 optim:
   weight_decay: 0
-  lr: 3e-4 #1e-5
+  lr: 0.00005 # 3e-4 / 1e-5 / 1e-4
   beta1: 0.9
   beta2: 0.999
   eps: 1e-8
@@ -79,18 +84,19 @@ trainer:
   num_nodes: 1
   devices: 1
   accumulate_grad_batches: 1
-  gradient_clip_val: 1.0
+  gradient_clip_val: 0.5 #1.0 / 0.5
   precision: '32-true' # bf16-mixed / 32-true 
   num_sanity_val_steps: 2
-  max_steps: 1_000_000
+  max_steps: 100_000 #100_000 
   log_every_n_steps: 10
   #limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
   #limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
   check_val_every_n_epoch: 1 #5
+  enable_progress_bar : True
 
 wandb:
   project: voxel-diffusion
-  notes: Voxel diffusion
+  notes: Training latent flow with b=0.001 vae 
   group: null
   job_type: null
   name: ${now:%Y.%m.%d}-${now:%H%M%S} 
@@ -113,4 +119,4 @@ checkpointing:
   #save_dir: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.25/184958   #${cwd:}
   # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
   resume_from_ckpt: false #true
-  resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
+  resume_ckpt_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.29/100731/checkpoints/scaffold_best.ckpt
