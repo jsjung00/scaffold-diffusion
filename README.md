@@ -1,87 +1,55 @@
-# VoxelCNN
+# Scaffold Diffusion
 
-[VoxelCNN](http://openaccess.thecvf.com/content_ICCV_2019/papers/Chen_Order-Aware_Generative_Modeling_Using_the_3D-Craft_Dataset_ICCV_2019_paper.pdf) is an order-aware generative model for building houses in Minecraft. This codebase is a [PyTorch](https://pytorch.org/) implementation of the training and evaluation pipeline for VoxelCNN.
-![VoxelCNN](./img/voxelcnn_intro.png)
+TODO: add some generated examples here. 
 
-VoxelCNN is trained and evaluated with the [*3D-Craft*](https://craftassist.s3-us-west-2.amazonaws.com/pubr/house_data.tar.gz) dataset.
-![3D-Craft Dataset](./img/3d_craft_dataset.png)
 
-For more details, please refer to the ICCV 19' paper [*Order-Aware Generative Modeling Using the 3D-Craft Dataset*](http://openaccess.thecvf.com/content_ICCV_2019/papers/Chen_Order-Aware_Generative_Modeling_Using_the_3D-Craft_Dataset_ICCV_2019_paper.pdf).
+## Abstract
+Generating realistic sparse multi-category 3D voxel structures is difficult due to the cubic memory scaling of voxel structures and moreover the significant class imbalance caused by sparsity. We introduce Scaffold Diffusion, a generative model designed for sparse multi-category 3D voxel structures. By treating voxels as tokens, Scaffold Diffusion uses a discrete diffusion language model to generate 3D voxel structures. We show that discrete diffusion language models can be extended beyond inherently sequential domains such as text to generate spatially coherent 3D structures. We evaluate on Minecraft house structures from the 3D-Craft dataset and demonstrate that—unlike prior baselines and an auto-regressive formulation—Scaffold Diffusion produces realistic and coherent structures even when trained on data with over 98% sparsity. We provide an interactive viewer where readers can visualize generated samples and the generation process. Our results highlight discrete diffusion as a promising framework for 3D sparse voxel generative modeling.
 
-## Installation
+For further details, see:
+Project page (live demo): https://scaffold.deepexploration.org/ 
+Paper link: https://arxiv.org/pdf/2509.00062
 
-Python version >= 3.7 is required.
+### Generated samples
+TODO: add some generated samples here
 
-### 0. Clone the repo
+## Note on code structure
+This code structure uses hydra and is heavily adapted from https://github.com/kuleshov-group/mdlm/tree/master. When running training and evaluation scripts, please make sure to check and make changes to the 'configs/config.yaml'. 
 
-```
-git clone https://github.com/facebookresearch/VoxelCNN
-cd VoxelCNN
-```
 
-### 1. (Optional) Create a virtual environment
+## Discrete Diffusion 
+How to train discrete diffusion. 
+'''python main.py mode=train model=scaffold_diffusion model_name=scaffold_diffusion'''
 
-```
-pip install virtualenv
-virtualenv voxelcnn_venv
-source voxelcnn_venv/bin/activate
-```
+How to generate samples.
+Please first add a path to the diffusion model checkpoint to the  'eval.checkpoint_path' variable in 'configs/config.yaml'.
+Command:
+'''python main.py mode=sample_eval model=scaffold_diffusion model_name=scaffold_diffusion'''
+Results will be saved as a generated folder under '/output_files'.
 
-### 2. Install PyTorch
+## Baselines
+How to train AR baseline.
+'''python main.py mode=train model=ar_baseline model_name=ar_baseline'''
 
-Please follow the official [installation guide](https://pytorch.org/get-started/locally/) to install PyTorch version >= 1.3.
+How to train (Lee et al. 2023) baseline 
+First train the VQVAE.
+ '''python main.py mode=train model=vqvae_baseline model_name=vqvae_baseline'''
+Add the trained ckpt to 'configs/config.yaml'
+Then train the latent multinomial diffusion. 
+ '''python main.py mode=train model=latent_multinomial model_name=latent_multinomial'''
 
-### 3. Install other dependencies
 
-```
-pip install numpy requests tqdm
-```
+## Code acknowledgements 
+We are grateful for the open source projects MDLM (https://github.com/kuleshov-group/mdlm/tree/master) for providing training and diffusion code and (VoxelCNN) for the datasets and data processing code (https://github.com/facebookresearch/voxelcnn).
 
-### 4. (Optional) Verify installation by running unit tests
-
-```
-python -m unittest discover -s test -v
-```
-
-## Training and Evaluation
-
-The [*3D-Craft*](https://craftassist.s3-us-west-2.amazonaws.com/pubr/house_data.tar.gz) dataset will be downloaded automatically when launching the training for the first time.
-
-Run the fast training (fewer epochs, slightly worse results):
-```
-python main.py --num_epochs 3 --step_size 1 --save_dir /path/to/save/log/and/checkpoints
-```
-
-Example final test results for the fast training:
-```
-acc@1: 0.622  acc@5: 0.760  acc@10: 0.788
-cca_10%: 13.374  cca_25%: 11.115  cca_50%: 12.546  cca_75%: 12.564  cca_90%: 7.632  cca_avg: 11.446
-mtc: 131.411  mtc_normed: 0.241
-```
-
-Run the full training:
-```
-python main.py --save_dir /path/to/save/log/and/checkpoints
-```
-
-Example final test results for the full training:
-```
-acc@1: 0.640  acc@5: 0.778  acc@10: 0.806
-cca_10%: 13.630  cca_25%: 12.223  cca_50%: 13.168  cca_75%: 13.047  cca_90%: 7.571  cca_avg: 11.928
-mtc: 121.753  mtc_normed: 0.223
-```
-
-## License
-
-VoxelCNN is released under the [CC-BY-NC 4.0 license](LICENSE).
 
 ## Citing
-
 ```
-@inproceedings{zchen2019,
-  title = {Order-Aware Generative Modeling Using the 3D-Craft Dataset},
-  author = {Chen, Zhuoyuan and Guo, Demi and Xiao, Tong and Xie, Saining and Chen, Xinlei and Yu, Haonan and Gray, Jonathan and Srinet, Kavya and Fan, Haoqi and Ma, Jerry and Qi, Charles R and Tulsiani, Shubham and Szlam, Arthur and Zitnick, C. Lawrence},
-  booktitle = {ICCV},
-  year = {2019},
+@inproceedings{jung2025scaffolddiffusionsparsemulticategory,
+      title={Scaffold Diffusion: Sparse Multi-Category Voxel Structure Generation with Discrete Diffusion}, 
+      author={Justin Jung},
+      booktitle={Workshop on Structured Probabilistic Inference {\&} Generative Modeling at NeurIPS 2025},
+      year={2025},
+      url={https://arxiv.org/abs/2509.00062}, 
 }
 ```
