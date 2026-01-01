@@ -27,6 +27,7 @@ import models.dit3d_window
 import noise_schedule
 import utils
 import os 
+from tqdm import tqdm 
 
 from sparse_vae.diffusion_lightning import GaussianDDPM
 from sparse_vae.vae_lightning import SparseStructureVAE
@@ -555,7 +556,7 @@ class ARBaseline(L.LightningModule):
         return copy_flag * x + (1 - copy_flag) * _x
 
     @torch.no_grad()
-    def _sample(self, num_steps=None, eps=1e-5):
+    def _sample(self):
         """Generate samples from the model.
             Note: we may lose one token if the original sequence has L many active tokens (i.e no padding space)
                 to accomodate the <BOS> token
@@ -577,11 +578,11 @@ class ARBaseline(L.LightningModule):
 
         # generating sequences that start with <BOS> token 
         x = token_ids.clone() 
-        for i in range(max_batch_active_tokens):
-            logits = self.forward(x, token_pos, pad_mask) # (B,L,V)
+        for i in tqdm(range(max_batch_active_tokens)):
+            logits = self.forward(x[:, :i+1], token_pos[:, :i+1], pad_mask[:, :i+1]) # (B,L,V)
             next_token_logits = logits[:, i]    
             probs = F.softmax(next_token_logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1, replacement=True)
+            idx_next = torch.multinomial(probs, num_samples=1, replacement=True).squeeze(dim=1)
 
             x[:, i+1] = idx_next
 
@@ -594,7 +595,7 @@ class ARBaseline(L.LightningModule):
         return_pad_mask = pad_mask[:, 1:]
         return return_x, return_token_pos, return_pad_mask
 
-    def restore_model_and_sample(self, num_steps, eps=1e-5):
+    def restore_model_and_sample(self):
         """Generate samples from the model."""
         # Lightning auto-casting is not working in this method for some reason
         if self.ema:
@@ -606,7 +607,7 @@ class ARBaseline(L.LightningModule):
             )
         self.backbone.eval()
         self.noise.eval()
-        samples, token_pos, pad_mask = self._sample(num_steps=num_steps, eps=eps)
+        samples, token_pos, pad_mask = self._sample()
         if self.ema:
             self.ema.restore(
                 itertools.chain(self.backbone.parameters(), self.noise.parameters())

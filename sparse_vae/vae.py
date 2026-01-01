@@ -130,7 +130,7 @@ class SparseStructureEncoder(nn.Module):
         self.norm_type = norm_type
         self.use_fp16 = use_fp16 
         #self.dtype = torch.bfloat16 #NOTE: this needs to change based on precision that you are training lightning with 
-        #self.dtype = torch.float16 if use_fp16 else torch.float32
+        self.dtype = torch.float16 if use_fp16 else torch.float32
 
         self.input_layer = nn.Conv3d(in_channels, channels[0], 3, padding=1)
 
@@ -186,7 +186,7 @@ class SparseStructureEncoder(nn.Module):
         self.blocks.apply(convert_module_to_f32)
         self.middle_block.apply(convert_module_to_f32)
 
-    def forward(self, x: torch.Tensor, sample_posterior: bool = False, return_raw: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sample_posterior: bool = False, return_raw: bool = False, perturb: bool = False) -> torch.Tensor:
         h = self.input_layer(x)
         h = h.type(self.dtype)
 
@@ -200,11 +200,20 @@ class SparseStructureEncoder(nn.Module):
         mean, logvar = h.chunk(2, dim=1)
 
         if sample_posterior:
+            #z = torch.randn_like(logvar) + (torch.rand_like(logvar)*0.02 - 0.01)
+            z_prior = torch.randn_like(logvar)
             std = torch.exp(0.5 * logvar)
             z = mean + std * torch.randn_like(std)
+
+            if perturb:
+                z_perturb = z + 0.1*torch.randn_like(z)
+                if return_raw:
+                    return z, z_perturb, mean, logvar 
+                else:
+                    return z, z_perturb
         else:
             z = mean
-            
+      
         if return_raw:
             return z, mean, logvar
         return z
@@ -243,7 +252,7 @@ class SparseStructureDecoder(nn.Module):
         self.norm_type = norm_type
         self.use_fp16 = use_fp16
         #self.dtype = torch.bfloat16
-        #self.dtype = torch.float16 if use_fp16 else torch.float32
+        self.dtype = torch.float16 if use_fp16 else torch.float32
 
         self.input_layer = nn.Conv3d(latent_channels, channels[0], 3, padding=1)
 

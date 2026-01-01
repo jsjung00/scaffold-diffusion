@@ -101,16 +101,7 @@ class ScaffoldDiffusion(L.LightningModule):
             self.backbone = models.dit3d_vanilla.DIT(self.config, self.vocab_size)
         else:
             raise ValueError(f"Unknown backbone: {self.config.backbone}")
-
-        # define occupancy diffusion generator
-        #TODO: use an actual model to generate
-        '''
-        self.latent_diffusion = GaussianDDPM.load_from_checkpoint(config.latent.diffusion_ckpt)
-        self.latent_diffusion.eval()
-        self.vae = SparseStructureVAE.load_from_checkpoint(config.latent.vae_ckpt)
-        self.vae.eval()
-        '''
-
+        #Future work: use a trained network to generate boolean occupancy maps 
         self.occupancy_gen = RealOccupancyGenerator(config, os.path.join(HOME_DIR,'32_real_occupancy_maps.pth'))
 
         self.T = self.config.T
@@ -649,7 +640,6 @@ class ScaffoldDiffusion(L.LightningModule):
         # "generate" some air token positions
         with torch.no_grad():
             occupancy_map = self.occupancy_gen.get_random_batch(batch_size=batch_size_per_gpu) #(B,X,Y,Z)
-   
         # generate prior sequence 
         token_pos, token_ids = self._get_token_pos_ids(occupancy_map.long(), occupancy_map) #pad_mask is 1 where active voxel 
         token_pos, token_ids = token_pos.to(self.device), token_ids.to(self.device)
@@ -658,11 +648,6 @@ class ScaffoldDiffusion(L.LightningModule):
         fully_masked = self._sample_prior(batch_size_per_gpu, self.config.model.length).to(self.device)
 
         x = torch.where(pad_mask, fully_masked, token_ids) #[MASK] and [PAD] tokens 
-
-        # generate fully masked (B, D, D, D)
-        #x = self._sample_prior(batch_size_per_gpu, self.config.data.voxel_side_len, self.config.data.voxel_side_len, self.config.data.voxel_side_len).to(
-        #    self.device
-        #)
 
         timesteps = torch.linspace(1, eps, num_steps + 1, device=self.device)
         dt = (1 - eps) / num_steps
@@ -961,18 +946,6 @@ class ScaffoldDiffusion(L.LightningModule):
         xt = self.q_xt(token_ids, move_chance)
         assert torch.sum(token_ids == self.pad_token) == torch.sum(xt == self.pad_token)
         model_output = self.forward(xt, token_pos, unet_conditioning, pad_mask)  # (B, L, Vocab)
-        
-        # debugging the all air behavior
-        predictions = torch.argmax(model_output, dim=-1)
-        num_air_majority = (predictions == 0).sum().item()
-        num_samples = predictions.numel()
-        #print(f"After forward pass, modified logits air ratio: {num_air_majority / num_samples:.3f} \n")
-
-        #non_air_predictions = torch.argmax(model_output, dim=-1)[occupancy_map.bool()]
-        #num_air_majority = (non_air_predictions == 0).sum().item()
-        #num_samples = non_air_predictions.numel()
-        #print(f"After forward pass, non-air positions air majority {num_air_majority / num_samples}")
-
 
         utils.print_nans(model_output, "model_output")
 
@@ -982,7 +955,7 @@ class ScaffoldDiffusion(L.LightningModule):
             )
 
         if self.T > 0:
-            raise ValueError("Have not fixed code for this yet; only use continuous time. Set T == 0")
+            raise ValueError("Future work: only continuous time is fixed. Set T == 0")
             diffusion_loss = self._d3pm_loss(
                 model_output=model_output, xt=xt, x0=token_ids, t=t
             )

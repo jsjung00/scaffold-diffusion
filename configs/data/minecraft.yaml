@@ -2,10 +2,14 @@ data_dir: /home/jsjung00/Desktop/Code/voxeldiffusion/data
 max_samples: null 
 train: minecraft
 valid: minecraft
-voxel_side_len: 32
-air_not_air: False
+voxel_side_len: 32 # 32 / 64 
+air_not_air: False # False / True
 
 max_seq_len: 1024
 max_active_tokens: 1024
 
 tokenizer_name_or_path: minecraft
+
+rotate: False # True / False 
+translate: False # True / False 
+max_translation: 0 # 4 

@@ -50,15 +50,20 @@ class GaussianDDPM(L.LightningModule):
     
             
         self.lambda_variational = self.config.model.lambda_variational
+        #NOTE: Does not work on multi-GPU! We are explicitly storing our values without buffer
+        self.alphas_hat = self.var_scheduler.get_alpha_hat().cuda()
+        self.alphas_hat.requires_grad_(False)
+        self.alphas = self.var_scheduler.get_alphas().cuda()
+        self.alphas.requires_grad_(False)
+        self.betas = self.var_scheduler.get_betas().cuda()
+        self.betas.requires_grad_(False)
+        self.betas_hat = self.var_scheduler.get_betas_hat().cuda()
+        self.betas_hat.requires_grad_(False)
+        ''''
         self.register_buffer('alphas_hat', self.var_scheduler.get_alpha_hat())
         self.register_buffer('alphas', self.var_scheduler.get_alphas())
         self.register_buffer('betas', self.var_scheduler.get_betas())
         self.register_buffer('betas_hat', self.var_scheduler.get_betas_hat())
-        '''
-        self.alphas_hat = self.var_scheduler.get_alpha_hat().to(self.device)
-        self.alphas = self.var_scheduler.get_alphas().to(self.device)
-        self.betas = self.var_scheduler.get_betas().to(self.device)
-        self.betas_hat = self.var_scheduler.get_betas_hat().to(self.device)
         '''
         self.mse = nn.MSELoss()
         self.vlb = self.config.model.vlb 
@@ -118,12 +123,12 @@ class GaussianDDPM(L.LightningModule):
         with torch.no_grad():
             X = self.vae_model.encode(batch) #get dense latent (B,C,D,D,D)
         
-        t = torch.randint(0, self.T - 1, (X.shape[0],), device=X.device)
+        t = torch.randint(0, self.T, (X.shape[0],), device=X.device)
 
         # TODO: could normalize latent....
         alpha_hat = self.alphas_hat[t].reshape(-1, 1, 1, 1, 1) 
         eps = torch.randn_like(X)
-
+    
         x_t = x0_to_xt(X, alpha_hat, eps)
         
         # TODO: change backbone to allow for variational loss. right now v is None 
@@ -153,8 +158,8 @@ class GaussianDDPM(L.LightningModule):
         with torch.no_grad():
             X = self.vae_model.encode(batch) #get dense latent (B,C,D,D,D)
 
-        t = torch.randint(0, self.T - 1, (X.shape[0],), device=X.device)
-
+        t = torch.randint(0, self.T, (X.shape[0],), device=X.device)
+     
         alpha_hat = self.alphas_hat[t].reshape(-1, 1, 1, 1, 1)
 
         eps = torch.randn_like(X)
@@ -243,12 +248,13 @@ class GaussianDDPM(L.LightningModule):
         return [optimizer], [scheduler_dict]
 
     #TODO: add diffferent sampling schedulers 
+    #TODO: Force the alpha_t, beta_t calculation in float32, then cast back to bfloat16
     def generate(self, T=None, batch_size=1, get_intermediate_steps=False):
         # move transformer backbone to bf16 because of fast_attn NOTE: assumes that we use fast_attn bf16
         #self.denoiser_module = self.denoiser_module.to(dtype=torch.bfloat16)
         #self.denoiser_module.set_dtype(dtype=self.dtype)
         self.denoiser_module.set_dtype(dtype=torch.bfloat16)
-
+     
         T = T or self.T 
         if get_intermediate_steps:
             steps = []
@@ -256,12 +262,13 @@ class GaussianDDPM(L.LightningModule):
         res = self.config.model.backbone.resolution 
         out_channels = self.config.model.backbone.out_channels
 
+        # TODO: Double check that the X_noise is bf16... because I am training with that 
         X_noise = torch.randn(batch_size, out_channels, res, res, res, device=self.device, dtype=self.dtype)
+         
         #X_noise_bf16 = X_noise.to(torch.bfloat16)
         beta_sqrt = torch.sqrt(self.betas)
 
         for t in range(T-1, -1, -1):
-            X_noise = X_noise.to(torch.bfloat16)
             if get_intermediate_steps:
                 steps.append(X_noise)
             t_tens = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
@@ -279,6 +286,7 @@ class GaussianDDPM(L.LightningModule):
             if t == 0:
                 z.fill_(0)
             
+            # TODO: DOUBLE CHECK ALL BETA AND ALPHA IS FLOAT
             alpha_t = self.alphas[t_tens].reshape(-1,1,1,1,1)
             alpha_hat_t = self.alphas_hat[t_tens].reshape(-1,1,1,1,1)
             X_noise = 1 / (torch.sqrt(alpha_t)) * \

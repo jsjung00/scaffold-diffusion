@@ -54,9 +54,11 @@ class MinecraftTokenizer:
         #set the mask token id and the pad token id to be the two largest
         self.pad_token_id = len(block_ids)
         self.mask_token_id = len(block_ids) + 1
-        self.bos_token_id = len(block_ids) + 2
-        
-        self.vocab_size = len(block_ids) + 3
+        if config.model.model_name == 'ar_baseline':
+            self.bos_token_id = len(block_ids) + 2
+            self.vocab_size = len(block_ids) + 3
+        else:
+            self.vocab_size = len(block_ids)+2
         
 
         if self.air_not_air:
@@ -77,8 +79,9 @@ class MinecraftTokenizer:
         token2blockid = torch.full((self.vocab_size,), fill_value=-1, dtype=torch.long)
         token2blockid[token_ids] = block_ids # first set all the tokens that label the minecraft voxels
         token2blockid[self.pad_token_id] = self.pad_token_id
-        token2blockid[self.mask_token_id] = self.mask_token_id 
-        token2blockid[self.bos_token_id] = self.bos_token_id
+        token2blockid[self.mask_token_id] = self.mask_token_id
+        if config.model.model_name == "ar_baseline": 
+            token2blockid[self.bos_token_id] = self.bos_token_id
 
         self.token2blockid = token2blockid
         

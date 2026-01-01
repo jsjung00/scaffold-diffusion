@@ -163,3 +163,17 @@ data/*
 !data/splits.json
 *.pth
 *.txt
+
+output_files/
+
+_main.py 
+sparse_vae_explore.py 
+explore.py 
+todo.md 
+voxel_req.txt 
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+LICENSE
+test/ 
+dit-3d/
+

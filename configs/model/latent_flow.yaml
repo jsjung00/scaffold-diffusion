@@ -1,0 +1,18 @@
+model_name: latent_flow
+
+input_channels: 16 # 16 / 8   #NOTE: should be same as sparse_vae.yaml latent_channels
+
+backbone:
+  resolution: 16 #16
+  in_channels: ${..input_channels}
+  out_channels: ${..input_channels}
+  model_channels: 768
+  cond_channels: None
+  num_blocks: 12
+  num_heads: 12
+  mlp_ratio: 4
+  patch_size: 1 # 2
+  pe_mode: ape
+  qk_rms_norm: true
+  use_fp16: false  
+

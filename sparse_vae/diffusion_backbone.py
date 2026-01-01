@@ -195,4 +195,4 @@ class SparseStructureDiffusionModel(nn.Module):
         h = h.permute(0, 2, 1).view(h.shape[0], h.shape[2], *[self.resolution // self.patch_size] * 3)
         h = unpatchify(h, self.patch_size).contiguous()
 
-        return h, None 
+        return h 

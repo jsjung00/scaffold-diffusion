@@ -1,6 +1,0 @@
-data_dir: /home/jsjung00/Desktop/Code/voxeldiffusion/data
-max_samples: null 
-train: minecraft
-valid: minecraft
-voxel_side_len: 16
-air_not_air: True

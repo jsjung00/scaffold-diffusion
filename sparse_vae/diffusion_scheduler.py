@@ -37,7 +37,7 @@ class LinearScheduler(Scheduler):
         self.T = T
         self.beta_start = beta_start
         self.beta_end = beta_end
-        self._beta = torch.linspace(beta_start, beta_end, T)
+        self._beta = torch.linspace(beta_start, beta_end, T).float()
         self._alpha = 1.0 - self._beta
         self._alpha_hat = torch.cumprod(self._alpha, dim=0)
         self._alpha_hat_t_minus_1 = torch.roll(self._alpha_hat, shifts=1, dims=0)
@@ -48,22 +48,22 @@ class LinearScheduler(Scheduler):
         """
         Returns the cumulative product of (1 - beta) over time.
         """
-        return self._alpha_hat
+        return self._alpha_hat.float()
 
     def get_alphas(self):
         """
         Returns the values of alpha over time.
         """
-        return self._alpha
+        return self._alpha.float()
 
     def get_betas(self):
         """
         Returns the values of beta over time.
         """
-        return self._beta
+        return self._beta.float()
 
     def get_betas_hat(self):
         """
         Returns the values of beta_hat over time.
         """
-        return self._beta_hat
+        return self._beta_hat.float()

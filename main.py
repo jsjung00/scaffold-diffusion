@@ -128,10 +128,44 @@ def _print_config(
             rich.print(tree, file=fp)
 
 
+def create_progressive_tensors(samples, mask_token_id, pad_mask):
+    """
+    Creates a list of tensors that progressively reveal the original samples.
+    
+    Args:
+        samples: Tensor of shape (B, L)
+        mask_token_id: The token ID to use for masking
+        pad_mask: Tensor of shape (B,L). 1 if not pad 
+    
+    Returns:
+        List of tensors, of variable shapes (T', L) where T' is the variable number of timesteps for that batch 
+    """
+    B, L = samples.shape
+    result = []
+
+    for batch_idx in range(B):
+        sequence = samples[batch_idx]
+        pad_sequence = pad_mask[batch_idx]
+        progression_list = []     
+        # First tensor: all mask tokens
+        mask_tensor = torch.full_like(sequence, mask_token_id)
+        progression_list.append(mask_tensor.clone())
+
+        # Progressive reveal: each step reveals one more position
+        for i in range(torch.sum(pad_sequence).item()):
+            tensor = torch.full_like(sequence, mask_token_id)
+            tensor[:i+1] = sequence[:i+1]
+            progression_list.append(tensor)
+
+
+        progression_tensor = torch.stack(progression_list) # (T', L)
+        result.append(progression_tensor)
+    
+    return result
+
 def generate_samples(config, logger, tokenizer, save_traj=False):
     ''' 
-    #TODO: fix. Our output should be a list of voxel maps? that way we can convert to a list of files if we want... 
-    #NOTE: when we de-tokenize mask_id, it will convert to block value -1. You need to decide what block value mask_id should be
+    Generates samples from the checkpoint model and saves as .nbt and .png files in a created folder 
     '''
     logger.info('Generating samples.')
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,8 +192,30 @@ def generate_samples(config, logger, tokenizer, save_traj=False):
         if config.model.model_name == "ar_baseline":
             samples, token_pos, pad_mask = model.restore_model_and_sample()
             samples = samples.detach().cpu()
+
             if save_traj:
-                raise ValueError("Not implemented yet. Shouldn't be too hard, we are just creating frames with left to right")
+                inter_values = create_progressive_tensors(samples, tokenizer.mask_token_id, pad_mask) #List[(B,L)]
+                batch_size = len(inter_values)
+                for i in range(batch_size):
+                    time_seq = inter_values[i] #(T, L)
+                    time_len = time_seq.shape[0] 
+
+                    time_seq_blocks = model.tokenizer.detokenize(time_seq)
+                    sample_pad_mask = pad_mask[i].repeat(time_len, 1)
+                    sample_token_pos = token_pos[i].repeat(time_len, 1, 1)
+                    # normalize the y coordinate to make min 0 
+                    active_token_pos = sample_token_pos[sample_pad_mask] #(N, 3)
+                    sample_token_pos[:, :, 1] -= active_token_pos[:,1].min() 
+                    time_seq_voxels = model._reshape_seq_voxels(time_seq_blocks, sample_token_pos, sample_pad_mask) #(T, X,Y,Z)
+                    # convert MASK token to block_id 252
+                    time_seq_voxels[time_seq_voxels == tokenizer.mask_token_id] = 252
+                    # convert erroneous BOS token to block_id 252 (OR: hard code logits to not choose BOS)
+                    time_seq_blocks[time_seq_blocks == tokenizer.bos_token_id] = 252
+                    voxels = time_seq_voxels[-1]
+
+                    save_delta_encoded(time_seq_voxels, f"batch{batch_idx}_seq{i}.json", base_dir=new_folder_path)
+                    #voxel_to_nbt(voxels, f"batch{batch_idx}_sample_{i}", base_dir=new_folder_path, gzip=True)
+                    #voxel_to_plot(voxels, f"batch{batch_idx}_sample_{i}", base_dir=new_folder_path)
             else:
                 block_samples = model.tokenizer.detokenize(samples) #(B, L) containing pad tokens
                 block_voxels = model._reshape_seq_voxels(block_samples, token_pos, pad_mask) #(B,X,Y,Z)
@@ -168,7 +224,6 @@ def generate_samples(config, logger, tokenizer, save_traj=False):
                     voxel_to_nbt(voxels, f"batch{batch_idx}_generated_sample_{i+1}", base_dir=new_folder_path, gzip=True)
                     voxel_to_plot(voxels, f"batch{batch_idx}_generated_sample_{i+1}", base_dir=new_folder_path)
         elif config.model.model_name == "latent_multinomial":
-            breakpoint()
             samples = model.sample(example_batch).detach().cpu()
             if save_traj:
                 raise ValueError("Not implemented yet. Shouldn't be too hard, we are just creating frames with left to right")
@@ -191,8 +246,8 @@ def generate_samples(config, logger, tokenizer, save_traj=False):
                     time_seq_blocks = model.tokenizer.detokenize(time_seq)
                     sample_pad_mask = pad_mask[i].repeat(time_len, 1)
                     sample_token_pos = token_pos[i].repeat(time_len, 1, 1)
-                    # normalize the y coordinate to make min 0 active_token_pos = sample_token_pos[sample_pad_mask] #(N, 3)
-                    # TODO: fix bug? why is code deleted here? 
+                    # normalize the y coordinate to make min 0 
+                    active_token_pos = sample_token_pos[sample_pad_mask] #(N, 3)
                     sample_token_pos[:, :, 1] -= active_token_pos[:,1].min() 
                     time_seq_voxels = model._reshape_seq_voxels(time_seq_blocks, sample_token_pos, sample_pad_mask) #(T, X,Y,Z)
                     # convert MASK token to block_id 252
@@ -210,10 +265,13 @@ def generate_samples(config, logger, tokenizer, save_traj=False):
                     voxels = block_voxels[i]
                     voxel_to_nbt(voxels, f"batch{batch_idx}_generated_sample_{i+1}", base_dir=new_folder_path, gzip=True)
                     voxel_to_plot(voxels, f"batch{batch_idx}_generated_sample_{i+1}", base_dir=new_folder_path)
-        return 
+    return 
 
 @torch.no_grad()
 def autoencode(config, logger, tokenizer, save_traj=False):
+    '''
+    Calculate autoencoder voxel reconstruction accuracy
+    '''
     logger.info('Generating samples.')
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     save_base_folder = os.path.join(BASE_DIR, "output_files")
@@ -230,8 +288,6 @@ def autoencode(config, logger, tokenizer, save_traj=False):
                                   train_ds=train_ds)
     model.eval()
     
-  
-    # iterate for 10 batches
     batch_accs = []
     non_air_accs = []
     max_batches = 100
@@ -249,22 +305,14 @@ def autoencode(config, logger, tokenizer, save_traj=False):
         non_air_accs.append(non_air_acc)
 
         non_equal_voxels = (~equal.bool()).int()
-
-        #run_voxel_overlay_server(non_equal_voxels[0], batch[0])
-        #generate_figure(non_equal_voxels[0], batch[0])
-        #voxel_overlay_plotly(non_equal_voxels.detach().numpy(), batch.detach().numpy())
-
         voxel_to_plot(non_equal_voxels[0], f"batch{i}_nonequal_{0}", base_dir=new_folder_path)
         voxel_to_plot(output[0], f"batch{i}_generated_sample_{0}", base_dir=new_folder_path)
-
 
         acc = torch.sum(equal) / equal.numel()
         batch_accs.append(acc.item())
         i += 1
     print(f"Mean accuracy {np.mean(batch_accs)} Mean nonair {np.mean(non_air_accs)}")
     
-
-
 
 def _train(config, logger, tokenizer):
     logger.info('Starting Training.')
@@ -305,17 +353,9 @@ def _train(config, logger, tokenizer):
 
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
-    
-    first_batch = next(iter(train_ds))
 
-    
-    #voxel_to_plot(first_batch[0], "overfit_first_sample", base_dir='/home/jsjung00/Desktop/Code/voxeldiffusion/output_files')
-
-    #model = diffusion.Diffusion(
-    #    config, tokenizer)
     if config.model.model_name == "sparse_vae":
         model = SparseStructureVAE(config, sparse_layers=False) 
-        #model = GaussianDDPM(config)
     elif config.model.model_name == "scaffold_diffusion":
         model = ScaffoldDiffusion(config, tokenizer)
     elif config.model.model_name == "ar_baseline":
@@ -329,7 +369,6 @@ def _train(config, logger, tokenizer):
         class_freq = get_class_freq(train_ds)
         class_weights = get_class_weights(class_freq)
         completion_criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
-        # TODO: remove config and completion_criterion if you train vqvae again 
         Dense = VQVAE.load_from_checkpoint(
             config.multinomial_vqvae.vqvae_ckpt,
             config=config, 
@@ -342,7 +381,7 @@ def _train(config, logger, tokenizer):
     elif config.model.model_name == "latent_diffusion":
         model = GaussianDDPM(config) 
     else:
-        raise ValueError("only sparsevae or scaffold")
+        raise ValueError("Incorrect model type specified")
 
 
     trainer = hydra.utils.instantiate(
@@ -362,15 +401,13 @@ def _train(config, logger, tokenizer):
 def main(config):
 
     """Main entry point for training."""
-    #L.seed_everything(config.seed)
     _print_config(config, resolve=True, save_cfg=True)
 
     logger = utils.get_logger(__name__)
     tokenizer = dataloader.get_tokenizer(config)
    
-
     if config.mode == 'sample_eval':
-        generate_samples(config, logger, tokenizer, save_traj=False)
+        generate_samples(config, logger, tokenizer, save_traj=True)
     elif config.mode == 'autoencode':
         autoencode(config, logger, tokenizer)
     else:

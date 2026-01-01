@@ -18,7 +18,7 @@ HOME_DIR = os.path.dirname(os.path.abspath(__file__))
 class RealOccupancyGenerator:
     def __init__(self, config, stored_maps_file=None):
         self.config = config 
-        tokenizer = MinecraftTokenizer(config, config.data.air_not_air)
+        tokenizer = MinecraftTokenizer(config, self.config.data.air_not_air)
 
         train_ds, valid_ds = dataloader.get_dataloaders(
             config, tokenizer)
@@ -26,9 +26,9 @@ class RealOccupancyGenerator:
         self.valid_ds = valid_ds 
 
         if stored_maps_file is None:
-            self.create_maps_file(os.path.join(HOME_DIR, 'real_occupancy_maps.pth'))
+            self.create_maps_file(os.path.join(HOME_DIR, '32real_occupancy_maps.pth'))
         
-        self.maps = torch.load(os.path.join(HOME_DIR, 'real_occupancy_maps.pth'))  
+        self.maps = torch.load(os.path.join(HOME_DIR, '32real_occupancy_maps.pth'))  
          
 
     def create_maps_file(self, file_path):
@@ -42,6 +42,7 @@ class RealOccupancyGenerator:
             binary_occupancy_maps.append(occupancy_map)
         
         occupancy_tensor = torch.concat(binary_occupancy_maps, dim=0) #(N, X, Y, Z)
+        print(f"Total number of houses: {occupancy_tensor.size(0)}")
         torch.save(occupancy_tensor, file_path)
         print(f"Saved tensor to {file_path}")
 

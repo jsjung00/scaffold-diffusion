@@ -1,38 +1,39 @@
+# This is adapted from the default config in https://github.com/kuleshov-group/mdlm/blob/master/configs/config.yaml
+
 defaults:
   - _self_
   - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
-  - /data: minecraft #minecraft TODO: change
-  - /model: scaffold_diffusion #latent_flow / latent_diffusion / sparse_vae / scaffold_diffusion / small / ar_baseline / vqvae_baseline #TODO: change ''
+  - /data: minecraft
+  - /model: scaffold_diffusion #scaffold_diffusion / small / ar_baseline / vqvae_baseline / latent_flow / latent_diffusion / sparse_vae / 
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: cosine_decay_warmup #constant_warmup
 
 mode: train  # train / sample_eval / autoencode 
 diffusion: absorbing_state
-backbone: dit  # unet / dit_3d / dit #TODO: change
+backbone: dit  # unet / dit_3d / dit 
 parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
-mask_token_id: null # 0 for air 
-overfit: False  #False
+mask_token_id: null 
+overfit: False 
 
 # naming
-model_name: scaffold #latent_diffusion / sparse_vae / scaffold
+model_name: scaffold_diffusion #scaffold_diffusion / small / ar_baseline / vqvae_baseline / latent_flow / latent_diffusion / sparse_vae / 
 
 seed: 1
 
 latent:
-  vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/111538/checkpoints/39-50000.ckpt
-  #vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.20/200536/checkpoints/sparse_vae_best.ckpt
-  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/091224/checkpoints/scaffold_best.ckpt
+  vae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/111538/checkpoints/39-50000.ckpt #Add your own ckpt path
+  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/091224/checkpoints/scaffold_best.ckpt #Add your own ckpt path
 
 multinomial_vqvae:
-  vqvae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/223833/checkpoints/vqvae_best.ckpt
-  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/234253/checkpoints/latent_multinomial_best.ckpt
+  vqvae_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/223833/checkpoints/vqvae_best.ckpt #Add your own ckpt path
+  diffusion_ckpt: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.22/234253/checkpoints/latent_multinomial_best.ckpt #Add your own ckpt path
 
 loader:
-  global_batch_size: 28 #  28 24
+  global_batch_size: 28 
   eval_global_batch_size: 28
   # Note: batch_size and eval_batch_size are **per machine**
   batch_size: 28
@@ -44,8 +45,7 @@ sampling:
   predictor: ddpm_cache  # analytic / ddpm / ddpm_cache
   steps: 1024
   noise_removal: True
-  # TODO(yair): @subham, why aren't these params under `eval`?
-  num_sample_batches: 1  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
+  num_sample_batches: 2 #1 / 90  # Total samples: `num_gpus` * `loader.eval_batch_size` * num_sample_batches
   num_sample_log: 2
   semi_ar: False
   stride_length: 1
@@ -53,17 +53,15 @@ sampling:
   val_sample_freq: 1000 # 10
 
 training:
-  ema: 0.9999 # 0.9999
-  use_ema: True # True
+  ema: 0.9999 
+  use_ema: True 
   antithetic_sampling: True
   importance_sampling: False
   sampling_eps: 1e-3
   change_of_variables: False
 
 eval:
-  #checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.31/230745/checkpoints/83-30000.ckpt
-  #checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.13/072426/checkpoints/69-25000.ckpt #/home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.24/111538/checkpoints/39-50000.ckpt
-  checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.08.19/221105/checkpoints/scaffold_best.ckpt
+  checkpoint_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.13/072426/checkpoints/69-25000.ckpt #Add your own ckpt path
   disable_ema: False
   compute_generative_perplexity: False
   perplexity_batch_size: 8
@@ -116,7 +114,6 @@ checkpointing:
   # Use custom `save_dir` if, e.g., saving to S3 bucket, otherwise leave this parameter as is
   checkpoint_dir: ${cwd:}
   save_dir: ${cwd:}
-  #save_dir: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.06.25/184958   #${cwd:}
   # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
   resume_from_ckpt: false #true
-  resume_ckpt_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.29/100731/checkpoints/scaffold_best.ckpt
+  resume_ckpt_path: /home/jsjung00/Desktop/Code/voxeldiffusion/outputs/minecraft/2025.07.29/100731/checkpoints/scaffold_best.ckpt #Add your own ckpt path

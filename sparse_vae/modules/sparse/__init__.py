@@ -2,7 +2,7 @@ from typing import *
 
 BACKEND = 'spconv' 
 DEBUG = False
-ATTN = 'xformers' #'flash_attn' / xformers #TODO:change
+ATTN = 'flash_attn' #'flash_attn' / xformers #TODO:change
 
 def __from_env():
     import os

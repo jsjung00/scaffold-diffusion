@@ -1,6 +1,6 @@
 from typing import *
 
-BACKEND = 'xformers' #'sdpa' /'flash_attn' / xformers  #TODO:change
+BACKEND = 'flash_attn' #'sdpa' /'flash_attn' / xformers  #TODO:change
 DEBUG = False
 
 def __from_env():
