@@ -1,14 +1,18 @@
-# Scaffold Diffusion
-![▶️ Generation process](./assets/scaffold_generation.gif)
+# Scaffold Diffusion: Sparse Multi-Category Voxel Structure Generation with Discrete Diffusion
+<p align="center">
+  <img src="./assets/scaffold_generation.gif" alt="▶️ Generation process">
+</p>
 
 ## Abstract
 Generating realistic sparse multi-category 3D voxel structures is difficult due to the cubic memory scaling of voxel structures and moreover the significant class imbalance caused by sparsity. We introduce Scaffold Diffusion, a generative model designed for sparse multi-category 3D voxel structures. By treating voxels as tokens, Scaffold Diffusion uses a discrete diffusion language model to generate 3D voxel structures. We show that discrete diffusion language models can be extended beyond inherently sequential domains such as text to generate spatially coherent 3D structures. We evaluate on Minecraft house structures from the 3D-Craft dataset and demonstrate that—unlike prior baselines and an auto-regressive formulation—Scaffold Diffusion produces realistic and coherent structures even when trained on data with over 98% sparsity. We provide an interactive viewer where readers can visualize generated samples and the generation process. Our results highlight discrete diffusion as a promising framework for 3D sparse voxel generative modeling.
 
-Generated examples
+## Generated examples
 
-<video src="./assets/video1.mp4" controls width="300"></video>
-<video src="./assets/video2.mp4" controls width="300"></video>
-<video src="./assets/video3.mp4" controls width="300"></video>
+<p align="center">
+  <img src="./assets/video1.gif" alt="▶️ Generation process" width="30%">
+  <img src="./assets/video2.gif" alt="▶️ Generation process" width="30%">
+  <img src="./assets/video3.gif" alt="▶️ Generation process" width="30%">
+</p>
 
 For further details, see:
 - Project page (live demo): https://scaffold.deepexploration.org/ 
@@ -59,7 +63,7 @@ Add the trained ckpt to `configs/config.yaml`. Then train the latent multinomial
 Command: `python main.py mode=train model=latent_multinomial model_name=latent_multinomial`
 
 ## Code acknowledgements 
-We are grateful for the open source projects MDLM (https://github.com/kuleshov-group/mdlm/tree/master) for providing training and diffusion code and (VoxelCNN) for the datasets and data processing code (https://github.com/facebookresearch/voxelcnn).
+We are grateful for the open source projects MDLM (https://github.com/kuleshov-group/mdlm/tree/master) for providing training and discrete diffusion code and (VoxelCNN) for the datasets and data processing code (https://github.com/facebookresearch/voxelcnn).
 
 
 ## Citing
