@@ -1,8 +1,6 @@
 from voxelcnn.datasets import Craft3DDataset
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 import torch
-import json
-from sparse_vae.vae_lightning import SparseStructureVAE
 import transformers
 import os 
 import typing 
@@ -72,28 +70,13 @@ def get_dataloaders(config, tokenizer):
             total_samples_per_epoch = 10000
             dataset = CycleDataset(dataset, total_samples_per_epoch)
 
-        # TODO: remove or fix. Problem with forking is that there is overhead with spawn
-        if config.model.model_name == "latent_diffusion" and False:
-            # load encoder and get encoded dataset
-            encoder_path = config.latent.encoder_ckpt
-            vae_model = SparseStructureVAE.load_from_checkpoint(encoder_path)
-            vae_model.eval()
-            data_loaders[subset] = DataLoader(
-                dataset,
-                batch_size=config.loader.global_batch_size,
-                shuffle=subset == "train",
-                num_workers=config.loader.num_workers,
-                pin_memory=config.loader.pin_memory,
-                collate_fn=lambda batch: latent_collate_fn(batch, vae_model, "cuda"),
-            )
-        else:
-            data_loaders[subset] = DataLoader(
-                dataset,
-                batch_size=config.loader.global_batch_size,
-                shuffle=subset == "train",
-                num_workers=config.loader.num_workers,
-                pin_memory=config.loader.pin_memory,
-            )
+        data_loaders[subset] = DataLoader(
+            dataset,
+            batch_size=config.loader.global_batch_size,
+            shuffle=subset == "train",
+            num_workers=config.loader.num_workers,
+            pin_memory=config.loader.pin_memory,
+        )
     return data_loaders["train"], data_loaders["val"]
 
 

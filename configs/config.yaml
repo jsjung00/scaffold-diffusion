@@ -4,14 +4,14 @@ defaults:
   - _self_
   - /callbacks: [checkpoint_every_n_steps, checkpoint_monitor] #[checkpoint_every_n_steps, checkpoint_monitor, learning_rate_monitor]
   - /data: minecraft
-  - /model: scaffold_diffusion #scaffold_diffusion / small / ar_baseline / vqvae_baseline / latent_flow / latent_diffusion / sparse_vae / 
+  - /model: scaffold_diffusion #scaffold_diffusion / small / ar_baseline / vqvae_baseline / latent_multinomial 
   - /strategy: ddp
   - /noise: loglinear
   - /lr_scheduler: cosine_decay_warmup #constant_warmup
 
 mode: train  # train / sample_eval / autoencode 
 diffusion: absorbing_state
-backbone: dit  # unet / dit_3d / dit 
+backbone: dit  
 parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 

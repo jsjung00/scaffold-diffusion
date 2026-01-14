@@ -25,12 +25,9 @@ import dataloader
 import models
 import models.dit3d_window
 import noise_schedule
-import utils
 import os 
 from tqdm import tqdm 
 
-from sparse_vae.diffusion_lightning import GaussianDDPM
-from sparse_vae.vae_lightning import SparseStructureVAE
 from real_generator import RealOccupancyGenerator
 
 HOME_DIR = os.path.dirname(os.path.abspath(__file__))

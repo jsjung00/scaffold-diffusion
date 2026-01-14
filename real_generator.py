@@ -53,7 +53,6 @@ class RealOccupancyGenerator:
 @hydra.main(version_base=None, config_path='configs',
             config_name='config')
 def main(config):
-    breakpoint()
     OccGen = RealOccupancyGenerator(config, stored_maps_file=None)
     batch = OccGen.get_random_batch(batch_size=16)
     pass 

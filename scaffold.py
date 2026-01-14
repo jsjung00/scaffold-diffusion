@@ -28,8 +28,6 @@ import noise_schedule
 import utils
 import os 
 
-from sparse_vae.diffusion_lightning import GaussianDDPM
-from sparse_vae.vae_lightning import SparseStructureVAE
 from real_generator import RealOccupancyGenerator
 
 HOME_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -981,11 +979,7 @@ class ScaffoldDiffusion(L.LightningModule):
         x0: (torch.tensor) Voxel map of shape (B,X,Y,Z)
         occupancy_map: boolean of shape (B,X,Y,Z)
         '''
-        if self.config.model.backbone == "dit_3d":
-            raise ValueError("Didn't finish this. You can look at the git hub june code. You would need to change\
-                             sampling code. Does it condition on the occupancy map in generation?")
-            loss, likelihood = self._forward_pass_diffusion_voxels(x0, occupancy_map=occupancy_map)
-        elif self.config.model.backbone == "dit":
+        if self.config.backbone == "dit":
             # extract token_ids, token_pos 
             token_pos, token_ids = self._get_token_pos_ids(x0, occupancy_map) #(B,L,3) and (B, L)
 
@@ -994,7 +988,7 @@ class ScaffoldDiffusion(L.LightningModule):
             
             loss, likelihood = self._forward_pass_diffusion(token_ids, token_pos, pad_mask)
         else:
-            raise ValueError("have not implemented for other than dit3d and dit")
+            raise ValueError("have not implemented for other than dit")
 
         if pad_mask is not None:
             nlls = loss * pad_mask
