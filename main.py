@@ -12,9 +12,6 @@ import dataloader
 from voxelcnn.datasets import MinecraftTokenizer
 from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot, voxel_overlay_plotly, generate_figure
 from voxelcnn._data_utils import save_delta_encoded
-from sparse_vae.vae_lightning import SparseStructureVAE
-from sparse_vae.diffusion_lightning import GaussianDDPM
-from sparse_vae.flow_lightning import SparseFlow
 from callbacks.ema import EMA, EMAModelCheckpoint
 import diffusion
 from scaffold import ScaffoldDiffusion
@@ -77,14 +74,6 @@ def _load_from_checkpoint(config, tokenizer, train_ds=None):
             multi_criterion=completion_criterion
         )
 
-    elif config.model.model_name == "sparse_vae":
-        return SparseStructureVAE.load_from_checkpoint(
-            config.eval.checkpoint_path
-        )
-    elif config.model.model_name == "latent_flow":
-        return SparseFlow.on_load_checkpoint(
-            config.eval.checkpoint_path
-        )
     elif config.model.model_name == "latent_diffusion":
         return diffusion.Diffusion.load_from_checkpoint(
             config.eval.checkpoint_path,
@@ -354,9 +343,7 @@ def _train(config, logger, tokenizer):
     train_ds, valid_ds = dataloader.get_dataloaders(
         config, tokenizer)
 
-    if config.model.model_name == "sparse_vae":
-        model = SparseStructureVAE(config, sparse_layers=False) 
-    elif config.model.model_name == "scaffold_diffusion":
+    if config.model.model_name == "scaffold_diffusion":
         model = ScaffoldDiffusion(config, tokenizer)
     elif config.model.model_name == "ar_baseline":
         model = ARBaseline(config, tokenizer)
@@ -376,10 +363,6 @@ def _train(config, logger, tokenizer):
         )
         Dense.freeze()
         model = latent_multinomial_diffusion(config, Dense, completion_criterion)
-    elif config.model.model_name == "latent_flow":
-        model = SparseFlow(config, t_schedule={'name': 'uniform'})
-    elif config.model.model_name == "latent_diffusion":
-        model = GaussianDDPM(config) 
     else:
         raise ValueError("Incorrect model type specified")
 

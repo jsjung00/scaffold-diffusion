@@ -32,8 +32,10 @@ data/
 └── README
 ```
 
-A conda environment yaml `conda_env.yaml` is provided for ease of installation. However, to run the code, all that is needed is the packages from https://github.com/kuleshov-group/mdlm/tree/master and https://github.com/facebookresearch/voxelcnn. 
+A requirements file `requirements.txt` is provided for ease of installation. However, to run the code, all that is needed is the packages from https://github.com/kuleshov-group/mdlm/tree/master and https://github.com/facebookresearch/voxelcnn. 
 
+Once the environment is created, from the root directory please run 
+`python real_generator.py` which should save a '32real_occupancy_maps.pth' file to your home directory.  
 
 ## Discrete Diffusion 
 ### Training 

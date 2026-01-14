@@ -141,7 +141,7 @@ def voxel_overlay_plotly(voxel1, voxel2, title1="Voxel Map 1", title2="Voxel Map
     return fig
 
 
-def generate_block_colors(num_blocks=255, seed=42):
+def generate_block_colors(num_blocks=256, seed=42):
     '''
     Generate random colors for each block 
     '''

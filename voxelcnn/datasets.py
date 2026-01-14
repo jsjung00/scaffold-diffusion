@@ -25,13 +25,14 @@ from voxelcnn.data_utils import voxel_to_nbt, voxel_to_plot, voxel_to_json, voxe
 
 #torch.manual_seed(42)
 
+PARENT = Path(__file__).parent
 class MinecraftTokenizer:
-    def __init__(self, config, air_not_air=False, block_map_file='/home/jsjung00/Desktop/Code/voxeldiffusion/voxelcnn/block_id_map.json'):
+    def __init__(self, config, air_not_air=False, block_map_file='block_id_map.json'):
         self.config = config
         self.air_not_air = air_not_air 
         
         if not self.air_not_air:
-            with open(block_map_file, 'r') as f:
+            with open(PARENT / block_map_file, 'r') as f:
                 block_map = json.load(f) #block_id : name 
 
             pairs = sorted(block_map.items(), key= lambda kv: int(kv[0]))
